@@ -37,7 +37,9 @@ EXPECTED_EVENT_FILES = [
 ]
 
 def are_files_present(directory: Path, expected_filenames: list[str]) -> bool:
-    """Checks if all expected files exist in the specified directory."""
+    """
+    Checks if all expected files exist in the specified directory.
+    """
     if not directory.exists() or not directory.is_dir():
         return False
     return all((directory / filename).is_file() for filename in expected_filenames)
