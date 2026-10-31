@@ -138,6 +138,21 @@ def fetch_tm_transfers(tm_player_id: int | str) -> Optional[dict[str, Any]]:
         print(f"[ERROR] TM API Transfers Error ({tm_player_id}): {e}")
     return None
 
+def fetch_tm_injuries(tm_player_id: int | str) -> Optional[dict[str, Any]]:
+    """
+    Fetches the injury history of a player.
+    """
+    try:
+        url = f"{TM_API_URL}/players/{tm_player_id}/injuries"
+        resp = requests_get_retry(url)
+        if resp and resp.status_code == 200:
+            print(f"[OK] Injury history found: {tm_player_id}")
+            return resp.json()
+        print(f"[NOT FOUND] Injury history not found: {tm_player_id}")
+    except Exception as e:
+        print(f"[ERROR] TM API Injuries Error ({tm_player_id}): {e}")
+    return None
+
 if __name__ == "__main__":
     print(f"Target TM API URL: {TM_API_URL}")
     print("=" * 60)
@@ -177,6 +192,11 @@ if __name__ == "__main__":
     print(f"\n6. Testing Transfer History...")
     transfers = fetch_tm_transfers(player_id)
     assert transfers is not None, "Failed to fetch transfers"
+
+    # 7. Test Injury History
+    print(f"\n7. Testing Injury History...")
+    injuries = fetch_tm_injuries(player_id)
+    assert injuries is not None, "Failed to fetch injuries"
 
     print("\n" + "=" * 60)
     print("ALL TESTS PASSED: Streamlined Transfermarkt client is fully functional!")
