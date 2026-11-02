@@ -25,3 +25,17 @@ Weekly plan & completed tasks:
     - https://github.com/salimt/football-datasets
     - https://www.kaggle.com/datasets/davidcariboo/player-scores
     - https://github.com/dcaribou/transfermarkt-datasets
+
+### Running the Capology scraper in Docker
+
+Build the image from the repository root:
+
+```powershell
+docker build -f src/scraper-service/Dockerfile -t diplomaterv-capology-scraper .
+```
+
+Run it while preserving downloaded data on the host:
+
+```powershell
+docker run --rm -v "${PWD}/data:/app/data" diplomaterv-capology-scraper
+```
