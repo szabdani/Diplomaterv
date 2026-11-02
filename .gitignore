@@ -3,3 +3,5 @@
 
 # Ignore raw datasets
 data/wyscout/
+data/capology/
+data/transfermarkt/

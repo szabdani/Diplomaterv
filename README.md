@@ -14,11 +14,15 @@ Weekly plan & completed tasks:
 ### Scrapers
 
 - Transfermarkt: https://github.com/felipeall/transfermarkt-api
-- Capology: https://apify.com/jungle_synthesizer/capology-football-player-salary-scraper
+- Capology: Own Implementation
 
 ### Datasets
 
 - Wyscout: https://github.com/koenvo/wyscout-soccer-match-event-dataset
+
+### Potential additions:
+
+- Capology: https://apify.com/jungle_synthesizer/capology-football-player-salary-scraper
 - StatsBomb Open Data: https://github.com/hudl/open-data
 
 - Transfermarkt Datasets
@@ -26,16 +30,6 @@ Weekly plan & completed tasks:
     - https://www.kaggle.com/datasets/davidcariboo/player-scores
     - https://github.com/dcaribou/transfermarkt-datasets
 
-### Running the Capology scraper in Docker
+### Running the scrapers in Docker
 
-Build the image from the repository root:
-
-```powershell
-docker build -f src/scraper-service/Dockerfile -t diplomaterv-capology-scraper .
-```
-
-Run it while preserving downloaded data on the host:
-
-```powershell
-docker run --rm -v "${PWD}/data:/app/data" diplomaterv-capology-scraper
-```
+Build the image from the repository root, run TM API
