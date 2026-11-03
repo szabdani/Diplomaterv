@@ -13,6 +13,7 @@ from transfermarkt_client import (
     fetch_tm_transfers,
     fetch_tm_injuries,
 )
+from name_matcher import load_wyscout_index, is_player_in_wyscout
 
 # Resolve paths: <repo_root>/data/transfermarkt
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -21,6 +22,7 @@ RAW_SQUADS_DIR = OUTPUT_DIR / "squads_2017_2018"
 RAW_PLAYERS_DIR = OUTPUT_DIR / "players_2017_2018"
 DISCOVERED_TM_CLUBS_FILE = OUTPUT_DIR / "discovered_tm_clubs_2017_2018.json"
 CAPOLOGY_DISCOVERED_FILE = REPO_ROOT / "data" / "capology" / "discovered_clubs_2017_2018.json"
+WYSCOUT_PLAYERS_FILE = REPO_ROOT / "data" / "wyscout" / "players.json"
 
 # Transfermarkt Competition IDs for the Top 5 European Leagues
 TOP5_LEAGUE_TM_IDS = {
@@ -39,6 +41,20 @@ LEAGUE_COUNTRIES = {
     "Bundesliga": ["Germany"],
     "Ligue 1": ["France", "Monaco"],
 }
+
+# =====================================================================
+# Helpers for Caching and Validating Player Data
+# =====================================================================
+
+def is_cached_player_complete(cached_record: dict[str, Any]) -> bool:
+    """
+    Checks whether a cached player file is complete.
+    """
+    if cached_record.get("profile") is None:
+        return False
+    if not cached_record.get("fetch_complete", False):
+        return False
+    return True
 
 def discover_all_tm_clubs(season_year: int = 2017) -> dict[str, list[dict[str, Any]]]:
     """
@@ -99,6 +115,9 @@ def discover_all_tm_clubs(season_year: int = 2017) -> dict[str, list[dict[str, A
     print(f"[OK] Discovered clubs ({total_clubs}) saved to {DISCOVERED_TM_CLUBS_FILE.name}")
     return discovered
 
+# =====================================================================
+# Caching Transfermarkt Squads and Player Data
+# =====================================================================
 
 def fetch_and_cache_club_squad(
         club_id: str,
@@ -124,16 +143,6 @@ def fetch_and_cache_club_squad(
             json.dump(players, f, ensure_ascii=False, indent=2)
 
     return players
-
-def is_cached_player_complete(cached_record: dict[str, Any]) -> bool:
-    """
-    Checks whether a cached player file is complete.
-    """
-    if cached_record.get("profile") is None:
-        return False
-    if not cached_record.get("fetch_complete", False):
-        return False
-    return True
 
 def fetch_and_cache_player_details(
     player_summary: dict[str, Any],
@@ -208,13 +217,17 @@ def fetch_and_cache_player_details(
     }
 
     # Persist individual player record immediately
-    if fetch_complete:
-        with open(player_cache_file, "w", encoding="utf-8") as f:
-            json.dump(player_record, f, ensure_ascii=False, indent=2)
-    else:
-        print(f"[WARNING] Incomplete data for player {player_name} (ID: {player_id}).")
+    with open(player_cache_file, "w", encoding="utf-8") as f:
+        json.dump(player_record, f, ensure_ascii=False, indent=2)
+
+    if not fetch_complete:
+        print(f"[WARNING] Incomplete data saved for player {player_name} (ID: {player_id}).")
 
     return player_record
+
+# =====================================================================
+# Main Pipeline: Discover Clubs, Fetch Squads, Fetch Player Data
+# =====================================================================
 
 def scrape_all_top5_transfermarkt(season_year: int = 2017):
     """
@@ -224,6 +237,8 @@ def scrape_all_top5_transfermarkt(season_year: int = 2017):
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     RAW_SQUADS_DIR.mkdir(parents=True, exist_ok=True)
     RAW_PLAYERS_DIR.mkdir(parents=True, exist_ok=True)
+
+    wy_index = load_wyscout_index(WYSCOUT_PLAYERS_FILE)
 
     season_label = f"{season_year}_{season_year + 1}"
     all_players_data: list[dict[str, Any]] = []
@@ -250,8 +265,24 @@ def scrape_all_top5_transfermarkt(season_year: int = 2017):
                 failed_clubs.append((league_name, club_name, club_id))
                 continue
 
-            for idx, player_summary in enumerate(squad, start=1):
-                print(f"  -> [{idx}/{len(squad)}] ", end="")
+            # Check if each player in the squad is in the Wyscout index
+            active_squad = []
+            for player in squad:
+                p_id = str(player.get("id"))
+                cache_file = RAW_PLAYERS_DIR / f"{p_id}.json"
+
+                if cache_file.exists():
+                    active_squad.append(player)
+                elif is_player_in_wyscout(player, wy_index):
+                    active_squad.append(player)
+                else:
+                    p_name = player.get("name", "Unknown")
+                    print(f"  -> [FILTERED OUT] {p_name} (ID: {p_id}) not active in Wyscout 2017/18.")
+
+            print(f"[*] Processing {len(active_squad)} active players (cut from {len(squad)} total squad).")
+
+            for idx, player_summary in enumerate(active_squad, start=1):
+                print(f"  -> [{idx}/{len(active_squad)}] ", end="")
                 player_record = fetch_and_cache_player_details(
                     player_summary=player_summary,
                     club_id=club_id,
@@ -282,7 +313,7 @@ def scrape_all_top5_transfermarkt(season_year: int = 2017):
                         "injuries_count": len(player_record.get("injuries", [])),
                     })
 
-    # 3. Save consolidated datasets
+    # Save consolidated datasets
     json_file = OUTPUT_DIR / f"transfermarkt_players_{season_label}.json"
     csv_file = OUTPUT_DIR / f"transfermarkt_players_summary_{season_label}.csv"
 

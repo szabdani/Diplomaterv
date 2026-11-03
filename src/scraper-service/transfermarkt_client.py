@@ -1,12 +1,12 @@
 import os
-import re
 import time
 import random
-import unicodedata
 import requests
 from pathlib import Path
 from typing import Any, Optional
 from dotenv import load_dotenv
+
+from name_matcher import SLUG_QUERY_OVERRIDES, score_club_candidate
 
 # Automatically locate and load <repo_root>/.env
 ENV_PATH = Path(__file__).resolve().parent.parent.parent / ".env"
@@ -16,40 +16,16 @@ load_dotenv(dotenv_path=ENV_PATH)
 DEFAULT_TM_API_URL = "http://localhost:8000"
 TM_API_URL = os.getenv("TM_API_URL", DEFAULT_TM_API_URL).rstrip("/")
 
-# Regex to filter out youth, reserve, and women's teams from club search results
-YOUTH_OR_RESERVE_PATTERN = re.compile(
-    r"\b(u17|u18|u19|u21|u23|ii|b|youth|reserves|juv\.|uefa|women|fem\.|femenino)\b",
-    re.IGNORECASE,
-)
-
-# Common slug expansions for Transfermarkt search compatibility
-SLUG_QUERY_OVERRIDES = {
-    "st etienne": "saint-etienne",
-    "saint etienne": "saint-etienne",
-    "psg": "paris saint-germain",
-    "spal": "spal",
-    "bordeaux": "girondins bordeaux",
-    "angers": "angers sco",
-    "monaco": "as monaco",
-    "sevilla": "sevilla fc",
-}
-
-def normalize_text(text: str) -> str:
-    """
-    Strips accents and lowercases text for reliable token comparison.
-    """
-    if not text:
-        return ""
-    decomposed = unicodedata.normalize("NFKD", text)
-    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
-    return re.sub(r"[^a-z0-9\s]", " ", stripped.lower()).strip()
+# =====================================================================
+# Client Utilities
+# =====================================================================
 
 def requests_get_retry(
     url: str,
     headers: Optional[dict] = None,
-    retries: int = 5,
-    backoff: float = 5.0,
-    polite_delay: tuple[float, float] = (1.0, 2.0),
+    retries: int = 4,
+    backoff: float = 6.0,
+    polite_delay: tuple[float, float] = (0.8, 1.6),
 ) -> Optional[requests.Response]:
     """
     Executes a GET request with exponential backoff and rate-limit handling.
@@ -63,65 +39,23 @@ def requests_get_retry(
             if response.status_code in [200, 404]: # 404 is a valid response, but has no data
                 print(f"[OK] HTTP {response.status_code} at {url}")
                 return response
-            elif response.status_code in [403, 429, 502, 503, 504]:
-                wait_time = backoff * (2 ** i) + random.uniform(1.0, 3.0)
+            elif response.status_code in [403, 429]:
+                wait_time = backoff * (2 ** i) + random.uniform(3.0, 7.0)
                 print(f"[RATE LIMIT / WAF] HTTP {response.status_code} at {url}.")
                 time.sleep(wait_time)
             else:
                 print(f"[RETRY] ({i+1}/{retries}) HTTP {response.status_code} at {url}")
+                time.sleep(backoff)
         except requests.RequestException as e:
             wait_time = backoff * (2 ** i) + random.uniform(1.0, 3.0)
             print(f"[ERROR] ({i+1}/{retries}) Connection failed for {url}: {e}")
             time.sleep(wait_time)
 
-        time.sleep(backoff)
     return None
 
-def score_club_candidate(
-    candidate: dict[str, Any],
-    raw_query: str,
-    expected_countries: Optional[list[str]] = None,
-) -> int:
-    """
-    Scores a Transfermarkt club search result to prevent city, substring, youth, and country mismatches.
-    Returns -1 if the candidate is invalid.
-    """
-    club_name = candidate.get("name", "")
-    country = candidate.get("country", "")
-
-    # Reject if country does not match the league's allowed countries
-    if expected_countries and country:
-        if country.lower() not in [c.lower() for c in expected_countries]:
-            return -1
-
-    # Reject youth and reserve teams
-    if YOUTH_OR_RESERVE_PATTERN.search(club_name):
-        return -1
-
-    norm_club = normalize_text(club_name)
-    norm_query = normalize_text(raw_query)
-    club_tokens = set(norm_club.split())
-    query_tokens = [t for t in norm_query.split() if len(t) > 1]
-
-    score = 0
-
-    # High reward for exact whole-word token matches in club name
-    matched_tokens = sum(1 for qt in query_tokens if qt in club_tokens)
-    score += matched_tokens * 50
-
-    # Bonus if the club name starts with or equals the query
-    if norm_club == norm_query:
-        score += 100
-    elif norm_club.startswith(norm_query):
-        score += 40
-    elif norm_query in norm_club:
-        score += 20
-
-    # Penalize if zero query tokens matched as whole words
-    if query_tokens and matched_tokens == 0:
-        return -1
-
-    return score
+# =====================================================================
+# Fetching Transfermarkt API Data
+# =====================================================================
 
 def fetch_tm_competition_clubs(competition_id: str, season_year: int = 2017) -> list[dict[str, Any]]:
     """
@@ -280,6 +214,37 @@ def fetch_tm_injuries(tm_player_id: int | str) -> Optional[dict[str, Any]]:
     except Exception as e:
         print(f"[ERROR] TM API Injuries Error ({tm_player_id}): {e}")
     return None
+
+def fetch_tm_player_season_appearances(tm_player_id: int | str, season_year: int = 2017) -> int:
+    """
+    Fetches competition stats for a player and sums total appearances 
+    across all competitions for the given season year.
+    """
+    try:
+        url = f"{TM_API_URL}/players/{tm_player_id}/stats"
+        resp = requests_get_retry(url)
+        if resp and resp.status_code == 200:
+            data = resp.json()
+            stats_list = data.get("stats", []) or []
+            
+            total_apps = 0
+            for item in stats_list:
+                # Matches format like "17/18", "2017", or integer 2017
+                item_season = str(item.get("seasonID", item.get("season", "")))
+                short_year = str(season_year)[-2:]  # "17"
+                
+                if str(season_year) in item_season or f"{short_year}/" in item_season:
+                    # Appearances can be string ("5") or int (5) or "-" (0)
+                    apps = item.get("appearances", 0)
+                    if isinstance(apps, str):
+                        apps = int(apps) if apps.isdigit() else 0
+                    total_apps += (apps or 0)
+                    
+            return total_apps
+    except Exception as e:
+        print(f"[ERROR] Could not fetch stats for player {tm_player_id}: {e}")
+        
+    return 0
 
 if __name__ == "__main__":
     print(f"Target TM API URL: {TM_API_URL}")
