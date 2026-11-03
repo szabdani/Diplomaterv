@@ -1,3 +1,4 @@
+import difflib
 import json
 import re
 import unicodedata
@@ -51,6 +52,24 @@ SLUG_QUERY_OVERRIDES = {
     "saint etienne": "as saint-etienne",
     "bordeaux": "girondins bordeaux",
     "angers": "angers sco",
+}
+
+# Common player name aliases for Transfermarkt search compatibility
+KNOWN_ALIASES = {
+    "chicharito": "javier hernandez",
+    "zanka": "mathias jorgensen",
+    "cote": "jose angel valdes",
+    "pedro rocha": "pedro",
+    "gabigol": "gabriel barbosa",
+    "kepa": "kepa arrizabalaga",
+    "adrian": "adrian san miguel",
+    "jese": "jese rodriguez",
+    "raul": "raul gonzalez",
+    "michu": "miguel perez cuesta",
+    "morata": "alvaro morata",
+    "vitolo": "victor machin perez",
+    "ibai": "ibai gomez",
+    "rober pier": "roberto suarez pier",
 }
 
 # =====================================================================
@@ -195,9 +214,16 @@ def load_wyscout_index(wyscout_file: Path) -> dict[str, Any]:
         if tokens:
             all_tokens.append(tokens)
 
+        # Package tokens and normalized names into a record dict
+        record = {
+            "tokens": tokens,
+            "full_norm": full_norm,
+            "short_norm": short_norm,
+        }
+
         # Index primary and transposed DOB variants
         for dob_var in get_dob_variants(dob):
-            by_dob.setdefault(dob_var, []).append(tokens)
+            by_dob.setdefault(dob_var, []).append(record)
 
     print(f"[OK] Indexed {len(wy_players)} Wyscout players from {wyscout_file.name}")
     return {
@@ -217,21 +243,57 @@ def is_player_in_wyscout(tm_player: dict[str, Any], wy_index: dict[str, Any]) ->
     if not tm_name:
         return False
 
-    # 1. Exact match
-    if tm_name in wy_index["exact_names"]:
-        return True
+    # Apply alias expansion if present
+    expanded_alias = KNOWN_ALIASES.get(tm_name, "")
+    names_to_check = [tm_name]
+    if expanded_alias:
+        names_to_check.append(expanded_alias)
 
-    tm_tokens = set(t for t in tm_name.split() if len(t) >= 3)
+    # 1. Exact match
+    for name in names_to_check:
+        if name in wy_index["exact_names"]:
+            return True
+
+    tm_tokens = set()
+    for name in names_to_check:
+        tm_tokens.update(t for t in name.split() if len(t) >= 3)
+   
     if not tm_tokens:
         return False
+
+    tm_collapsed = tm_name.replace(" ", "")
 
     # 2. Flexible Date of Birth match
     tm_dob = tm_player.get("dateOfBirth")
     for dob_variant in get_dob_variants(tm_dob):
         if dob_variant in wy_index["by_dob"]:
-            for wy_toks in wy_index["by_dob"][dob_variant]:
+            for entry in wy_index["by_dob"][dob_variant]:
+                wy_toks = entry["tokens"]
+
+                # Direct token intersection
                 if tm_tokens & wy_toks:
                     return True
+
+                # Spacing collapse & fuzzy similarity
+                wy_full = entry["full_norm"]
+                wy_short = entry["short_norm"]
+
+                # Collapse spaces
+                if tm_collapsed and (tm_collapsed in wy_full.replace(" ", "") or wy_full.replace(" ", "") in tm_collapsed):
+                    return True
+
+                # Fuzzy string similarity when DOB aligns
+                for candidate in (wy_full, wy_short):
+                    if not candidate:
+                        continue
+                    ratio = difflib.SequenceMatcher(None, tm_name, candidate).ratio()
+                    if ratio >= 0.65:
+                        return True
+                    if expanded_alias:
+                        alias_ratio = difflib.SequenceMatcher(None, expanded_alias, candidate).ratio()
+                        if alias_ratio >= 0.65:
+                            return True
+            
 
     # 3. DOB-independent name token matching
     # Matches if:
