@@ -1,4 +1,5 @@
 import json
+import os
 import random
 import time
 import pandas as pd
@@ -25,12 +26,35 @@ LEAGUE_PAYROLL_URLS_2017_18 = {
     "Ligue 1": "https://www.capology.com/fr/ligue-1/payrolls/2017-2018/",
 }
 
+# =====================================================================
+# Scraper Utilities
+# =====================================================================
+
 def create_driver():
     """
     Initializes undetected Chrome browser to bypass Cloudflare challenges.
     """
     options = uc.ChromeOptions()
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1920,1080")
+
+    chrome_bin = os.getenv("CHROME_BIN")
+    chromedriver_path = os.getenv("CHROMEDRIVER_PATH")
+
+    if chrome_bin:
+        options.binary_location = chrome_bin
+        return uc.Chrome(
+            options=options,
+            driver_executable_path=chromedriver_path,
+            headless=False,  # Xvfb provides a virtual display in Docker so Cloudflare doesn't block headless
+        )
+
     return uc.Chrome(options=options)
+
+# =====================================================================
+# Helpers for Club Discovery and Salary Scraping
+# =====================================================================
 
 def get_league_club_slugs(driver, league_name: str, payroll_url: str) -> list[str]:
     """
@@ -145,6 +169,9 @@ def fetch_capology_club_salaries(driver, club_slug: str, league_name: str, seaso
 
     return squad_salaries
 
+# =====================================================================
+# Main Pipeline: Discover Clubs, Fetch Salaries, Save Dataset
+# =====================================================================
 
 def scrape_all_top5_leagues(season: str = "2017-2018"):
     """
