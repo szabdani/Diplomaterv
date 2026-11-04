@@ -18,36 +18,42 @@ TM_API_URL = os.getenv("TM_API_URL", DEFAULT_TM_API_URL).rstrip("/")
 def requests_get_retry(
     url: str,
     headers: Optional[dict] = None,
-    retries: int = 5,
-    backoff: float = 30.0,
-    polite_delay: tuple[float, float] = (2.0, 4.0),
+    retries: int = 4,
+    backoff: float = 10.0,
+    polite_delay: tuple[float, float] = (0.0, 0.05),
+    timeout: float = 15.0,
 ) -> Optional[requests.Response]:
     """
     Executes a GET request with exponential backoff and rate-limit handling.
     """
-    # Polite delay before every request to avoid triggering Transfermarkt 403 WAF blocks
-    time.sleep(random.uniform(*polite_delay))
+    if headers is None:
+        headers = {"Accept": "application/json"}
+    
+    # Polite delay before every request to avoid triggering Transfermarkt WAF blocks
+    if polite_delay[1] > 0:
+        time.sleep(random.uniform(*polite_delay))
 
     for i in range(retries):
         try:
-            response = requests.get(url, headers=headers)
-            if response.status_code in [200, 404]: # 404 is a valid response, but has no data
+            response = requests.get(url, headers=headers, timeout=timeout)
+            if response.status_code in [200, 404]:
                 print(f"[OK] HTTP {response.status_code} at {url}")
                 return response
             elif response.status_code in [403, 405, 429]:
-                wait_time = backoff * (1.5 ** i) + random.uniform(10.0, 20.0)
+                # Rate limit or WAF block
+                wait_time = backoff * (2 ** i) + random.uniform(0.5, 1.5)
                 print(f"[RATE LIMIT / WAF] HTTP {response.status_code} at {url}. Waiting {wait_time:.1f}s...")
                 time.sleep(wait_time)
             elif response.status_code >= 500:
-                wait_time = backoff * (i) + random.uniform(5.0, 10.0)
-                print(f"[SERVER ERROR] HTTP {response.status_code} at {url}. Retrying after {wait_time:.1f}s...")
-                time.sleep(wait_time)
+                # Server error
+                print(f"[SERVER ERROR] HTTP {response.status_code} at {url}. Retrying after {backoff}s...")
+                time.sleep(backoff)
             else:
                 print(f"[RETRY] ({i+1}/{retries}) HTTP {response.status_code} at {url}. Retrying after {backoff}s...")
                 time.sleep(backoff)
         except requests.RequestException as e:
-            wait_time = backoff * (1.5 ** i) + random.uniform(5.0, 10.0)
-            print(f"[ERROR] ({i+1}/{retries}) Connection failed for {url}: {e}")
+            wait_time = backoff * (i + 1)
+            print(f"[ERROR] ({i+1}/{retries}) Connection failed for {url}: {e}. Retrying after {wait_time}s...")
             time.sleep(wait_time)
 
     return None
@@ -154,6 +160,7 @@ def fetch_tm_player_search(tm_id: int | str, player_name: str) -> Optional[dict[
         print(f"[ERROR] TM API Player Search Error ({player_name}): {e}")
     return None
 
+
 def fetch_tm_player_profile(tm_player_id: int | str) -> Optional[dict[str, Any]]:
     """
     Fetches detailed player biographical data.
@@ -164,7 +171,9 @@ def fetch_tm_player_profile(tm_player_id: int | str) -> Optional[dict[str, Any]]
         if resp and resp.status_code == 200:
             print(f"[OK] Player profile found: {tm_player_id}")
             return resp.json()
-        print(f"[NOT FOUND] Player profile not found: {tm_player_id}")
+        if resp and resp.status_code == 404:
+            print(f"[NOT FOUND] Player profile not found: {tm_player_id}")
+            return {"id": str(tm_player_id), "notFound": True}
     except Exception as e:
         print(f"[ERROR] TM API Player Profile Error ({tm_player_id}): {e}")
     return None
@@ -179,7 +188,9 @@ def fetch_tm_market_value(tm_player_id: int | str) -> Optional[dict[str, Any]]:
         if resp and resp.status_code == 200:
             print(f"[OK] Market value history found: {tm_player_id}")
             return resp.json()
-        print(f"[NOT FOUND] Market value history not found: {tm_player_id}")
+        if resp and resp.status_code == 404:
+            print(f"[NOT FOUND] Market value history not found: {tm_player_id}")
+            return {"id": str(tm_player_id), "marketValueHistory": []}
     except Exception as e:
         print(f"[ERROR] TM API Market Value Error ({tm_player_id}): {e}")
     return None
@@ -194,7 +205,9 @@ def fetch_tm_transfers(tm_player_id: int | str) -> Optional[dict[str, Any]]:
         if resp and resp.status_code == 200:
             print(f"[OK] Transfer history found: {tm_player_id}")
             return resp.json()
-        print(f"[NOT FOUND] Transfer history not found: {tm_player_id}")
+        if resp and resp.status_code == 404:
+            print(f"[NOT FOUND] Transfer history not found: {tm_player_id}")
+            return {"id": str(tm_player_id), "transfers": []}
     except Exception as e:
         print(f"[ERROR] TM API Transfers Error ({tm_player_id}): {e}")
     return None
@@ -209,15 +222,17 @@ def fetch_tm_injuries(tm_player_id: int | str) -> Optional[dict[str, Any]]:
         if resp and resp.status_code == 200:
             print(f"[OK] Injury history found: {tm_player_id}")
             return resp.json()
-        print(f"[NOT FOUND] Injury history not found: {tm_player_id}")
+        if resp and resp.status_code == 404:
+            print(f"[NOT FOUND] Injury history not found: {tm_player_id}")
+            return {"id": str(tm_player_id), "injuries": []}
     except Exception as e:
         print(f"[ERROR] TM API Injuries Error ({tm_player_id}): {e}")
     return None
 
-def fetch_tm_player_season_appearances(tm_player_id: int | str, season_year: int = 2017) -> int:
+def fetch_tm_player_season_appearances(tm_player_id: int | str, season_year: int = 2017, competitionID: str = "") -> int:
     """
     Fetches competition stats for a player and sums total appearances 
-    across all competitions for the given season year.
+    across a single competition for the given season year.
     """
     try:
         url = f"{TM_API_URL}/players/{tm_player_id}/stats"
@@ -229,10 +244,10 @@ def fetch_tm_player_season_appearances(tm_player_id: int | str, season_year: int
             total_apps = 0
             for item in stats_list:
                 # Matches format like "17/18", "2017", or integer 2017
-                item_season = str(item.get("seasonID", item.get("season", "")))
-                short_year = str(season_year)[-2:]  # "17"
-                
-                if str(season_year) in item_season or f"{short_year}/" in item_season:
+                item_season = str(item.get("seasonID"))
+                item_competition = str(item.get("competitionID"))
+
+                if item_season == season_year and item_competition == competitionID:
                     # Appearances can be string ("5") or int (5) or "-" (0)
                     apps = item.get("appearances", 0)
                     if isinstance(apps, str):
