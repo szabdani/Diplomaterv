@@ -59,7 +59,7 @@ def is_cached_player_complete(cached_record: dict[str, Any]) -> bool:
 def discover_all_tm_clubs(season_year: int = 2017) -> dict[str, list[dict[str, Any]]]:
     """
     Loads Top 5 league clubs from local cache if present, otherwise queries the TM API.
-    Falls back to Capology discovered club slugs if the competition endpoint is unavailable.
+    Falls back to Capology discovered club slugs when a competition endpoint is unavailable.
     """
     if DISCOVERED_TM_CLUBS_FILE.exists():
         print(f"[CACHE HIT] Loaded discovered TM clubs from {DISCOVERED_TM_CLUBS_FILE.name}")
@@ -68,44 +68,52 @@ def discover_all_tm_clubs(season_year: int = 2017) -> dict[str, list[dict[str, A
 
     discovered: dict[str, list[dict[str, Any]]] = {}
 
-    # Attempt to read discovered clubs from Capology JSON
-    if(CAPOLOGY_DISCOVERED_FILE.exists()):
+    capology_leagues: dict[str, list[str]] = {}
+    if CAPOLOGY_DISCOVERED_FILE.exists():
         print(f"[OK] Loaded Capology discovered clubs from {CAPOLOGY_DISCOVERED_FILE.name}")
         with open(CAPOLOGY_DISCOVERED_FILE, "r", encoding="utf-8") as f:
             capology_leagues = json.load(f)
 
-        for league_name, slugs in capology_leagues.items():
-            print(f"[DISCOVERY] Searching TM for {league_name}: {len(slugs)} clubs.")
-            expected_country_filters = LEAGUE_COUNTRIES.get(league_name, [])
-            discovered[league_name] = []
-            seen_ids: set[str] = set()
+    for league_name, comp_id in TOP5_LEAGUE_TM_IDS.items():
+        print(f"\n[DISCOVERY] Fetching TM API for {league_name} ({comp_id}) clubs for season {season_year}...")
+        clubs = fetch_tm_competition_clubs(comp_id, season_year=season_year)
 
-            for slug in slugs:
-                search_name = slug.replace("-", " ")
-                club_res = fetch_tm_team_data_search(search_name, short_name=search_name, expected_countries=expected_country_filters)
-                if club_res and club_res.get("id"):
-                    club_id = str(club_res["id"])
-                    if club_id in seen_ids:
-                        print(f"[WARNING] Duplicate club ID ({club_id}) for {search_name} in {league_name}.")
-                    seen_ids.add(club_id)
+        if clubs:
+            discovered[league_name] = [
+                {"id": str(c.get("id")), "name": c.get("name")} for c in clubs if c.get("id")
+            ]
+            continue
 
-                    discovered[league_name].append({
-                        "id": str(club_res["id"]),
-                        "name": club_res.get("name", search_name),
-                        "slug": slug
-                    })
-                else:
-                    print(f"[ERROR] No TM club found for Capology slug '{slug}' ({search_name}) in {league_name}.")
-    else:
-        # Fallback: Discover clubs directly from Transfermarkt API for each Top 5 league
-        for league_name, comp_id in TOP5_LEAGUE_TM_IDS.items():
-            print(f"\n[DISCOVERY] Fetching TM API for {league_name} ({comp_id}) clubs for season {season_year}...")
-            clubs = fetch_tm_competition_clubs(comp_id, season_year=season_year)
+        slugs = capology_leagues.get(league_name, [])
+        if not slugs:
+            print(f"[WARNING] TM API failed and no Capology clubs are available for {league_name}.")
+            continue
 
-            if clubs:
-                discovered[league_name] = [
-                    {"id": str(c.get("id")), "name": c.get("name")} for c in clubs if c.get("id")
-                ]
+        print(f"[FALLBACK] Searching TM by Capology slugs for {league_name}: {len(slugs)} clubs.")
+        expected_country_filters = LEAGUE_COUNTRIES.get(league_name, [])
+        discovered[league_name] = []
+        seen_ids: set[str] = set()
+
+        for slug in slugs:
+            search_name = slug.replace("-", " ")
+            club_res = fetch_tm_team_data_search(
+                search_name,
+                short_name=search_name,
+                expected_countries=expected_country_filters,
+            )
+            if club_res and club_res.get("id"):
+                club_id = str(club_res["id"])
+                if club_id in seen_ids:
+                    print(f"[WARNING] Duplicate club ID ({club_id}) for {search_name} in {league_name}.")
+                seen_ids.add(club_id)
+
+                discovered[league_name].append({
+                    "id": club_id,
+                    "name": club_res.get("name", search_name),
+                    "slug": slug,
+                })
+            else:
+                print(f"[ERROR] No TM club found for Capology slug '{slug}' ({search_name}) in {league_name}.")
 
     # Save discovered clubs to disk so discovery only runs once
     with open(DISCOVERED_TM_CLUBS_FILE, "w", encoding="utf-8") as f:
