@@ -4,13 +4,8 @@ import random
 import requests
 from pathlib import Path
 from typing import Any, Optional
-from dotenv import load_dotenv
 
 from name_matcher import SLUG_QUERY_OVERRIDES, score_club_candidate
-
-# Automatically locate and load <repo_root>/.env
-ENV_PATH = Path(__file__).resolve().parent.parent.parent / ".env"
-load_dotenv(dotenv_path=ENV_PATH)
 
 # Base configuration
 DEFAULT_TM_API_URL = "http://localhost:8000"
@@ -23,13 +18,18 @@ TM_API_URL = os.getenv("TM_API_URL", DEFAULT_TM_API_URL).rstrip("/")
 def requests_get_retry(
     url: str,
     headers: Optional[dict] = None,
-    retries: int = 4,
-    backoff: float = 6.0,
-    polite_delay: tuple[float, float] = (0.8, 1.6),
+    retries: int = 5,
+    backoff: float = 30.0,
+    polite_delay: tuple[float, float] = (2.0, 4.0),
 ) -> Optional[requests.Response]:
     """
     Executes a GET request with exponential backoff and rate-limit handling.
     """
+    if headers is None:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+
     # Polite delay before every request to avoid triggering Transfermarkt 403 WAF blocks
     time.sleep(random.uniform(*polite_delay))
 
@@ -39,15 +39,19 @@ def requests_get_retry(
             if response.status_code in [200, 404]: # 404 is a valid response, but has no data
                 print(f"[OK] HTTP {response.status_code} at {url}")
                 return response
-            elif response.status_code in [403, 429]:
-                wait_time = backoff * (2 ** i) + random.uniform(3.0, 7.0)
-                print(f"[RATE LIMIT / WAF] HTTP {response.status_code} at {url}.")
+            elif response.status_code in [403, 405, 429]:
+                wait_time = backoff * (1.5 ** i) + random.uniform(10.0, 20.0)
+                print(f"[RATE LIMIT / WAF] HTTP {response.status_code} at {url}. Waiting {wait_time:.1f}s...")
+                time.sleep(wait_time)
+            elif response.status_code >= 500:
+                wait_time = backoff * (i) + random.uniform(5.0, 10.0)
+                print(f"[SERVER ERROR] HTTP {response.status_code} at {url}. Retrying after {wait_time:.1f}s...")
                 time.sleep(wait_time)
             else:
-                print(f"[RETRY] ({i+1}/{retries}) HTTP {response.status_code} at {url}")
+                print(f"[RETRY] ({i+1}/{retries}) HTTP {response.status_code} at {url}. Retrying after {backoff}s...")
                 time.sleep(backoff)
         except requests.RequestException as e:
-            wait_time = backoff * (2 ** i) + random.uniform(1.0, 3.0)
+            wait_time = backoff * (1.5 ** i) + random.uniform(5.0, 10.0)
             print(f"[ERROR] ({i+1}/{retries}) Connection failed for {url}: {e}")
             time.sleep(wait_time)
 
