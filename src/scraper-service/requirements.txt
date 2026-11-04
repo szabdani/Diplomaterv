@@ -1,6 +1,9 @@
 beautifulsoup4
 pandas
+pika
+pymongo
 python-dotenv
 requests
 selenium
+setuptools
 undetected-chromedriver

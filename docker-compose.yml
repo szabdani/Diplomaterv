@@ -1,7 +1,18 @@
+version: "3.8"
 services:
+  # External Transfermarkt Scraper API
+  transfermarkt-api:
+    build: https://github.com/felipeall/transfermarkt-api.git
+    container_name: transfermarkt-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+
+  # Raw Data Storage (MongoDB)
   mongodb:
     image: mongo:7.0
-    container_name: raw-db
+    container_name: raw-db-mongodb
+    restart: unless-stopped
     ports:
       - "27017:27017"
     environment:
@@ -10,34 +21,44 @@ services:
     volumes:
       - mongo_data:/data/db
 
+  # Message Queue (RabbitMQ)
   rabbitmq:
     image: rabbitmq:3.13-management
-    container_name: message-queue
+    container_name: message-queue-rabbitmq
+    restart: unless-stopped
     ports:
       - "5672:5672"   # AMQP port for Python & .NET
       - "15672:15672" # Management UI at http://localhost:15672
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
 
-  redis:
-    image: redis:7.2-alpine
-    container_name: cache-redis
-    ports:
-      - "6379:6379"
-
+  # Data Warehouse (PostgreSQL)
   postgres:
     image: postgres:16-alpine
-    container_name: dwh-db
+    container_name: dwh-db-postgres
+    restart: unless-stopped
     ports:
-      - "${POSTGRES_PORT}:5432"
+      - "5432:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_NAME}
     volumes:
-      - pg_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
 
+  # In-memory cache (Redis)
+  redis:
+    image: redis:7.2-alpine
+    container_name: cache-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # Business Intelligence Tool (Metabase)
   metabase:
     image: metabase/metabase:latest
     container_name: metabase-bi
@@ -46,6 +67,23 @@ services:
     depends_on:
       - postgres
 
+  # Custom Scraper Pipeline Script
+  scraper-pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: football-scraper-pipeline
+    depends_on:
+      - transfermarkt-api
+      - mongodb
+      - rabbitmq
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+
 volumes:
   mongo_data:
-  pg_data:
+  rabbitmq_data:
+  postgres_data:
+  redis_data:

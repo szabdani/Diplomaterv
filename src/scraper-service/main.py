@@ -26,7 +26,7 @@ MONGO_COLLECTION_NAME = os.getenv("MONGO_COLLECTION_NAME", "raw_payloads")
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "localhost")
 RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", "5672"))
 RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
-RABBITMQ_PASS = os.getenv("RABBITMQ_PASS", "guest")
+RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", "guest")
 RABBITMQ_QUEUE = os.getenv("RABBITMQ_QUEUE", "data_processing_queue")
 
 # Connect to MongoDB (raw-db)
@@ -35,7 +35,7 @@ raw_db = mongo_client[MONGO_DB_NAME]
 raw_collection = raw_db[MONGO_COLLECTION_NAME]
 
 # Connect to RabbitMQ
-credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASS)
+credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASSWORD)
 rabbit_params = pika.ConnectionParameters(
     host=RABBITMQ_HOST,
     port=RABBITMQ_PORT,
