@@ -1,6 +1,5 @@
 import os
 import json
-import uuid
 import pika
 import pymongo
 from collections import defaultdict
@@ -48,34 +47,46 @@ channel = rabbit_conn.channel()
 channel.queue_declare(queue=RABBITMQ_QUEUE, durable=True)
 
 
-def save_and_publish_claim_check(source: str, entity_type: str, raw_payload: dict):
+def save_and_publish_claim_check(
+        channel,
+        source: str,
+        entity_type: str,
+        raw_payload: dict,
+        unique_key: str,
+        metadata: dict | None = None,
+) -> None:
     """
     Implements the Claim-Check pattern
     - Saves the heavy raw JSON payload in MongoDB.
     - Publishes a lightweight reference message to RabbitMQ.
     """
-    doc_id = str(uuid.uuid4())
+    doc_id = f"{source}:{entity_type}:{unique_key}"
+    now_iso = datetime.now(timezone.utc).isoformat()
     document = {
         "_id": doc_id,
         "source": source,             # e.g., 'wyscout', 'transfermarkt', 'capology'
         "entity_type": entity_type,   # e.g., 'match_events', 'team_squad', 'player_wage'
-        "loaded_at": datetime.now(timezone.utc).isoformat(),
-        "payload": raw_payload
+        "unique_key": unique_key,
+        "metadata": metadata or {},
+        "loaded_at": now_iso,
+        "payload": raw_payload,
     }
     
     # Store in MongoDB
-    raw_collection.insert_one(document)
-    
+    raw_collection.replace_one({"_id": doc_id}, document, upsert=True)
+
     # Send lightweight Claim-Check to RabbitMQ
     claim_check_msg = {
         "document_id": doc_id,
         "source": source,
         "entity_type": entity_type,
+        "unique_key": unique_key,
+        "metadata": metadata or {},
         "timestamp": document["loaded_at"]
     }
     channel.basic_publish(
         exchange="",
-        routing_key="data_processing_queue",
+        routing_key=RABBITMQ_QUEUE,
         body=json.dumps(claim_check_msg),
         properties=pika.BasicProperties(delivery_mode=2)  # Persistent message
     )

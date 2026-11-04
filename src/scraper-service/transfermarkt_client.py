@@ -25,11 +25,6 @@ def requests_get_retry(
     """
     Executes a GET request with exponential backoff and rate-limit handling.
     """
-    if headers is None:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-
     # Polite delay before every request to avoid triggering Transfermarkt 403 WAF blocks
     time.sleep(random.uniform(*polite_delay))
 
