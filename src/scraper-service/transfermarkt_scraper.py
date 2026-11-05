@@ -9,12 +9,11 @@ from transfermarkt_client import (
     fetch_tm_competition_clubs,
     fetch_tm_team_data_search,
     fetch_tm_players_from_team,
-    fetch_tm_player_profile,
     fetch_tm_market_value,
     fetch_tm_transfers,
     fetch_tm_injuries,
 )
-from name_matcher import load_wyscout_index, is_player_in_wyscout, build_profile_from_squad_summary
+from utils import build_profile_from_squad_summary
 
 # Resolve paths: <repo_root>/data/transfermarkt
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -242,84 +241,12 @@ def fetch_and_cache_player_details(
     return player_record
 
 # =====================================================================
-# Fallback Dataset:
-# =====================================================================
-
-def seed_players_from_dataset(
-    target_player_map: dict[str, dict[str, Any]],
-    wy_index: dict[str, Any],
-    season_label: str = "2017-2018",
-):
-    """
-    Fallback dataset using https://github.com/dcaribou/transfermarkt-datasets.
-    Downloads players.csv.gz, player_valuations.csv.gz, and transfers.csv.gz in memory
-    and populates RAW_PLAYERS_DIR/{player_id}.json for any missing/incomplete players.
-    """
-    missing_ids = {
-        pid for pid in target_player_map
-        if not (RAW_PLAYERS_DIR / f"{pid}.json").exists()
-    }
-    if not missing_ids:
-        print("[DATASET SEEDER] All target players are already cached locally.")
-        return
-
-    print(f"[DATASET SEEDER] Seeding {len(missing_ids)} players from dcaribou/transfermarkt-datasets...")
-    players_df = pd.read_csv(f"{DCARIBOU_R2_BASE}/players.csv.gz", dtype={"player_id": str})
-    valuations_df = pd.read_csv(f"{DCARIBOU_R2_BASE}/player_valuations.csv.gz", dtype={"player_id": str})
-    transfers_df = pd.read_csv(f"{DCARIBOU_R2_BASE}/transfers.csv.gz", dtype={"player_id": str})
-
-    players_by_id = players_df[players_df["player_id"].isin(missing_ids)].set_index("player_id").to_dict("index")
-    vals_by_id = {
-        pid: grp.to_dict("records")
-        for pid, grp in valuations_df[valuations_df["player_id"].isin(missing_ids)].groupby("player_id")
-    }
-    trans_by_id = {
-        pid: grp.to_dict("records")
-        for pid, grp in transfers_df[transfers_df["player_id"].isin(missing_ids)].groupby("player_id")
-    }
-
-    seeded_count = 0
-    for pid in missing_ids:
-        ctx = target_player_map[pid]
-        player_summary = ctx["player_summary"]
-        ds_profile = players_by_id.get(pid, {})
-
-        profile = build_profile_from_squad_summary(player_summary)
-        if ds_profile:
-            profile["height"] = profile.get("height") or ds_profile.get("height_in_cm")
-            profile["foot"] = profile.get("foot") or ds_profile.get("foot")
-            profile["dateOfBirth"] = profile.get("dateOfBirth") or ds_profile.get("date_of_birth")
-
-        player_record = {
-            "tm_player_id": pid,
-            "player_name": player_summary.get("name", ds_profile.get("name", "Unknown")),
-            "season": season_label,
-            "league": ctx["league_name"],
-            "tm_club_id": ctx["club_id"],
-            "club_name": ctx["club_name"],
-            "joined_on": player_summary.get("joinedOn"),
-            "fetch_complete": True,
-            "profile": profile,
-            "market_value_history": vals_by_id.get(pid, []),
-            "transfers": trans_by_id.get(pid, []),
-            "injuries": [],
-        }
-
-        with open(RAW_PLAYERS_DIR / f"{pid}.json", "w", encoding="utf-8") as f:
-            json.dump(player_record, f, ensure_ascii=False, indent=2)
-        seeded_count += 1
-
-    print(f"[DATASET SEEDER] Seeded {seeded_count} player files into {RAW_PLAYERS_DIR.name}/.")
-
-
-# =====================================================================
 # Main Pipeline: Discover Clubs, Fetch Squads, Fetch Player Data
 # =====================================================================
 
 def scrape_all_top5_transfermarkt(
     season_year: int = 2017,
     max_workers: int = 4,
-    use_dataset_fallback: bool = True,
 ):
     """
     Main pipeline to discover all 2017/18 Top 5 league clubs, retrieve their squads,
@@ -329,13 +256,11 @@ def scrape_all_top5_transfermarkt(
     RAW_SQUADS_DIR.mkdir(parents=True, exist_ok=True)
     RAW_PLAYERS_DIR.mkdir(parents=True, exist_ok=True)
 
-    wy_index = load_wyscout_index(WYSCOUT_PLAYERS_FILE)
     season_label = f"{season_year}_{season_year + 1}"
 
     # Discover all clubs across the Top 5 leagues
     league_clubs_map = discover_all_tm_clubs(season_year=season_year)
     total_clubs = sum(len(clubs) for clubs in league_clubs_map.values())
-
 
     # Fetch all 98 club squads first 
     club_squads: list[tuple[str, str, str, list[dict[str, Any]]]] = []
@@ -351,7 +276,7 @@ def scrape_all_top5_transfermarkt(
             processed_clubs += 1
             club_id = str(club["id"])
             club_name = club["name"]
-            print(f"\n[{processed_clubs}/{total_clubs}] Club: {club_name} (ID: {club_id})")
+            print(f"[{processed_clubs}/{total_clubs}] Club: {club_name} (ID: {club_id})")
 
             squad = fetch_and_cache_club_squad(club_id, club_name, league_name, season_year=season_year)
             if not squad:
@@ -369,14 +294,6 @@ def scrape_all_top5_transfermarkt(
                         "league_name": league_name,
                     }
     print(f"\n[SQUADS READY] {len(club_squads)}/{total_clubs} clubs loaded ({len(unique_players_map)} unique players).")
-
-    # Optional: Seed from dcaribou/transfermarkt-datasets if enabled
-    if use_dataset_fallback:
-        seed_players_from_dataset(
-            target_player_map=unique_players_map,
-            wy_index=wy_index,
-            season_label=f"{season_year}-{season_year + 1}",
-        )
 
     # Fetch unique players in parallel with ThreadPoolExecutor
     total_unique = len(unique_players_map)
@@ -411,37 +328,42 @@ def scrape_all_top5_transfermarkt(
     all_players_data: list[dict[str, Any]] = []
     summary_rows: list[dict[str, Any]] = []
    
-    for league_name, club_id, club_name, squad in club_squads:
-        for player_summary in squad:
-            pid = str(player_summary.get("id", "")).strip()
-            cache_file = RAW_PLAYERS_DIR / f"{pid}.json"
-            if not cache_file.exists():
-                continue
+    # Player details are fetched and cached once per unique player ID.
+    # Consolidate from the same map so the output also contains one row per player.
+    for pid, player_context in unique_players_map.items():
+        cache_file = RAW_PLAYERS_DIR / f"{pid}.json"
+        if not cache_file.exists():
+            continue
 
-            with open(cache_file, "r", encoding="utf-8") as f:
-                player_record = json.load(f)
+        with open(cache_file, "r", encoding="utf-8") as f:
+            player_record = json.load(f)
 
-            all_players_data.append(player_record)
-            profile_data = player_record.get("profile", {}) or {}
-            pos_data = profile_data.get("position", {}) or {}
-            main_pos = pos_data.get("main") if isinstance(pos_data, dict) else pos_data
+        player_summary = player_context["player_summary"]
+        league_name = player_context["league_name"]
+        club_id = player_context["club_id"]
+        club_name = player_context["club_name"]
 
-            summary_rows.append({
-                "tm_player_id": player_record.get("tm_player_id"),
-                "player_name": player_record.get("player_name"),
-                "season": player_record.get("season"),
-                "league": league_name,
-                "tm_club_id": club_id,
-                "club_name": club_name,
-                "position": player_summary.get("position") or main_pos,
-                "date_of_birth": player_summary.get("dateOfBirth") or profile_data.get("dateOfBirth"),
-                "foot": player_summary.get("foot") or profile_data.get("foot"),
-                "height": player_summary.get("height") or profile_data.get("height"),
-                "joined_on": player_summary.get("joinedOn"),
-                "market_value_entries_count": len(player_record.get("market_value_history", [])),
-                "transfers_count": len(player_record.get("transfers", [])),
-                "injuries_count": len(player_record.get("injuries", [])),
-            })
+        all_players_data.append(player_record)
+        profile_data = player_record.get("profile", {}) or {}
+        pos_data = profile_data.get("position", {}) or {}
+        main_pos = pos_data.get("main") if isinstance(pos_data, dict) else pos_data
+
+        summary_rows.append({
+            "tm_player_id": player_record.get("tm_player_id"),
+            "player_name": player_record.get("player_name"),
+            "season": player_record.get("season"),
+            "league": league_name,
+            "tm_club_id": club_id,
+            "club_name": club_name,
+            "position": player_summary.get("position") or main_pos,
+            "date_of_birth": player_summary.get("dateOfBirth") or profile_data.get("dateOfBirth"),
+            "foot": player_summary.get("foot") or profile_data.get("foot"),
+            "height": player_summary.get("height") or profile_data.get("height"),
+            "joined_on": player_summary.get("joinedOn"),
+            "market_value_entries_count": len(player_record.get("market_value_history", [])),
+            "transfers_count": len(player_record.get("transfers", [])),
+            "injuries_count": len(player_record.get("injuries", [])),
+        })
 
     # Save consolidated datasets
     json_file = OUTPUT_DIR / f"transfermarkt_players_{season_label}.json"
@@ -454,7 +376,7 @@ def scrape_all_top5_transfermarkt(
     df.to_csv(csv_file, index=False, encoding="utf-8-sig")
 
     print("\n" + "=" * 60)
-    print(f"[DONE] Successfully processed {len(all_players_data)} player-season records.")
+    print(f"[DONE] Successfully processed {len(all_players_data)} unique player records.")
     print(f"JSON file: {json_file}")
     print(f"CSV file:  {csv_file}")
 

@@ -5,7 +5,7 @@ import requests
 from pathlib import Path
 from typing import Any, Optional
 
-from name_matcher import SLUG_QUERY_OVERRIDES, score_club_candidate
+from utils import SLUG_QUERY_OVERRIDES, score_club_candidate
 
 # Base configuration
 DEFAULT_TM_API_URL = "http://localhost:8000"

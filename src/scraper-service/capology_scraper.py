@@ -5,6 +5,7 @@ import time
 import pandas as pd
 import undetected_chromedriver as uc
 import re
+import subprocess
 from pathlib import Path
 from bs4 import BeautifulSoup
 from selenium.webdriver.common.by import By
@@ -30,6 +31,30 @@ LEAGUE_PAYROLL_URLS_2017_18 = {
 # Scraper Utilities
 # =====================================================================
 
+def get_installed_chrome_major_version() -> int | None:
+    """Detects the major version of Google Chrome installed on Windows."""
+    try:
+        # Query Windows Registry for Chrome version
+        cmd = r'reg query "HKEY_CURRENT_USER\Software\Google\Chrome\BLBeacon" /v version'
+        output = subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.DEVNULL)
+        match = re.search(r"version\s+REG_SZ\s+(\d+)\.", output)
+        if match:
+            return int(match.group(1))
+    except Exception:
+        pass
+
+    try:
+        # Fallback to HKLM
+        cmd = r'reg query "HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Google\Update\Clients\{8A69D345-D564-463c-AFF1-A69D9E530F96}" /v pv'
+        output = subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.DEVNULL)
+        match = re.search(r"pv\s+REG_SZ\s+(\d+)\.", output)
+        if match:
+            return int(match.group(1))
+    except Exception:
+        pass
+
+    return None
+
 def create_driver():
     """
     Initializes undetected Chrome browser to bypass Cloudflare challenges.
@@ -41,16 +66,18 @@ def create_driver():
 
     chrome_bin = os.getenv("CHROME_BIN")
     chromedriver_path = os.getenv("CHROMEDRIVER_PATH")
+    major_version = get_installed_chrome_major_version() or 156
 
     if chrome_bin:
         options.binary_location = chrome_bin
         return uc.Chrome(
             options=options,
             driver_executable_path=chromedriver_path,
+            version_main=major_version,
             headless=False,  # Xvfb provides a virtual display in Docker so Cloudflare doesn't block headless
         )
 
-    return uc.Chrome(options=options)
+    return uc.Chrome(options=options, version_main=major_version)
 
 # =====================================================================
 # Helpers for Club Discovery and Salary Scraping
@@ -106,7 +133,7 @@ def discover_all_clubs(driver) -> dict[str, list[str]]:
             discovered[league] = slugs
 
         # Polite jitter delay between requests
-        time.sleep(random.uniform(3.0, 6.0))
+        time.sleep(random.uniform(1.0, 3.0))
 
     # Save to disk so we only discover once
     with open(DISCOVERED_TEAMS_FILE, "w", encoding="utf-8") as f:
@@ -204,7 +231,7 @@ def scrape_all_top5_leagues(season: str = "2017-2018"):
                 else:
                     failed_clubs.append((league, club))
 
-                time.sleep(random.uniform(3.0, 6.0))
+                time.sleep(random.uniform(1.0, 3.0))
 
     finally:
         # Prevent the Windows WinError 6 double-quit crash on GC

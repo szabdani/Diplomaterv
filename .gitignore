@@ -1,6 +1,10 @@
 # Ignore environment variables
 .env
 
+# Ignore Python bytecode caches
+__pycache__/
+*.py[cod]
+
 # Ignore raw datasets
 data/wyscout/
 data/capology/

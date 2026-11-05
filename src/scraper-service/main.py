@@ -1,8 +1,10 @@
 import os
 import json
+import time
 import pika
 import pymongo
 from collections import defaultdict
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -45,6 +47,21 @@ rabbit_params = pika.ConnectionParameters(
 rabbit_conn = pika.BlockingConnection(rabbit_params)
 channel = rabbit_conn.channel()
 channel.queue_declare(queue=RABBITMQ_QUEUE, durable=True)
+
+
+@contextmanager
+def timed_step(step_name: str):
+    """Reports the elapsed time for one pipeline step."""
+    started_at = time.perf_counter()
+    try:
+        yield
+    except Exception:
+        elapsed_seconds = time.perf_counter() - started_at
+        print(f"[STEP FAILED] {step_name} took {elapsed_seconds:.2f} seconds.")
+        raise
+    else:
+        elapsed_seconds = time.perf_counter() - started_at
+        print(f"[STEP COMPLETE] {step_name} took {elapsed_seconds:.2f} seconds.")
 
 
 def save_and_publish_claim_check(
@@ -240,37 +257,44 @@ def run_pipeline():
     3. Scrapes Transfermarkt 2017/18 squads & player histories (uses local cache if already scraped).
     4. Stores all raw JSON documents in MongoDB and publishes Claim-Check tickets to RabbitMQ.
     """
+    pipeline_started_at = time.perf_counter()
     try:
         print("\n" + "=" * 60)
         print("STEP 1: Ensuring Wyscout 2017/18 Dataset")
         print("=" * 60)
         wyscout_dir = DATA_DIR / "wyscout"
-        ensure_wyscout_data(wyscout_dir)
+        with timed_step("STEP 1 - Ensuring Wyscout dataset"):
+            ensure_wyscout_data(wyscout_dir)
 
         print("\n" + "=" * 60)
         print("STEP 2: Scraping Capology 2017/18 Club Salaries")
         print("=" * 60)
-        scrape_all_top5_leagues(season="2017-2018")
+        with timed_step("STEP 2 - Scraping Capology salaries"):
+            scrape_all_top5_leagues(season="2017-2018")
 
         print("\n" + "=" * 60)
         print("STEP 3: Scraping Transfermarkt 2017/18 Players")
         print("=" * 60)
-        scrape_all_top5_transfermarkt(season_year=2017)
+        with timed_step("STEP 3 - Scraping Transfermarkt players"):
+            scrape_all_top5_transfermarkt(season_year=2017)
 
         print("\n" + "=" * 60)
         print("STEP 4A: Loading Wyscout Data into MongoDB & RabbitMQ")
         print("=" * 60)
-        load_wyscout_to_datapipeline(wyscout_dir)
+        with timed_step("STEP 4A - Loading Wyscout data"):
+            load_wyscout_to_datapipeline(wyscout_dir)
 
         print("\n" + "=" * 60)
         print("STEP 4B: Loading Capology Data into MongoDB & RabbitMQ")
         print("=" * 60)
-        load_capology_to_datapipeline(DATA_DIR / "capology" / "clubs_2017_2018")
+        with timed_step("STEP 4B - Loading Capology data"):
+            load_capology_to_datapipeline(DATA_DIR / "capology" / "clubs_2017_2018")
 
         print("\n" + "=" * 60)
         print("STEP 4C: Loading Transfermarkt Player Data into MongoDB & RabbitMQ")
         print("=" * 60)
-        load_transfermarkt_to_datapipeline(DATA_DIR / "transfermarkt" / "players_2017_2018")
+        with timed_step("STEP 4C - Loading Transfermarkt data"):
+            load_transfermarkt_to_datapipeline(DATA_DIR / "transfermarkt" / "players_2017_2018")
 
         print("\n" + "=" * 60)
         print("[PIPELINE COMPLETE] All sources scraped, stored in MongoDB, and queued in RabbitMQ!")
@@ -281,6 +305,8 @@ def run_pipeline():
             rabbit_conn.close()
         if mongo_client:
             mongo_client.close()
+        total_seconds = time.perf_counter() - pipeline_started_at
+        print(f"[PIPELINE TOTAL] Completed in {total_seconds:.2f} seconds.")
 
 
 if __name__ == "__main__":
