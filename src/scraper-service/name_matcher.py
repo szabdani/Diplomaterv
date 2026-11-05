@@ -196,6 +196,7 @@ def load_wyscout_index(wyscout_file: Path) -> dict[str, Any]:
     all_tokens: list[set[str]] = []
 
     for p in wy_players:
+        wy_id = p.get("wyId")
         first = p.get("firstName", "")
         last = p.get("lastName", "")
         short = p.get("shortName", "")
@@ -204,22 +205,27 @@ def load_wyscout_index(wyscout_file: Path) -> dict[str, Any]:
         full_norm = normalize_text(f"{first} {last}")
         short_norm = normalize_text(short)
 
-        if full_norm:
-            exact_names.add(full_norm)
-        if short_norm:
-            exact_names.add(short_norm)
-
         # Retain tokens with length >= 3 to avoid noise
         tokens = set(t for t in f"{full_norm} {short_norm}".split() if len(t) >= 3)
-        if tokens:
-            all_tokens.append(tokens)
 
         # Package tokens and normalized names into a record dict
         record = {
+            "wyscout_id": wy_id,
+            "short_name": decode_unicode_escapes(short),
+            "full_name": decode_unicode_escapes(f"{first} {last}".strip()),
+            "birth_date": dob,
             "tokens": tokens,
             "full_norm": full_norm,
             "short_norm": short_norm,
         }
+        
+        if full_norm and full_norm not in exact_names:
+            exact_names[full_norm] = record
+        if short_norm and short_norm not in exact_names:
+            exact_names[short_norm] = record
+
+        if tokens:
+            all_tokens.append(tokens)
 
         # Index primary and transposed DOB variants
         for dob_var in get_dob_variants(dob):
@@ -232,6 +238,7 @@ def load_wyscout_index(wyscout_file: Path) -> dict[str, Any]:
         "all_tokens": all_tokens,
     }
 
+# Use later in data-processor
 def is_player_in_wyscout(tm_player: dict[str, Any], wy_index: dict[str, Any]) -> bool:
     """
     Checks if a TM squad player exists in the Wyscout reference index:
@@ -308,3 +315,27 @@ def is_player_in_wyscout(tm_player: dict[str, Any], wy_index: dict[str, Any]) ->
                 return True
 
     return False
+
+# =====================================================================
+# Profile Building
+# =====================================================================
+def build_profile_from_squad_summary(player_summary: dict[str, Any]) -> dict[str, Any]:
+    """
+    Synthesizes the player profile object directly from the club squad response.
+    """
+    return {
+        "id": str(player_summary.get("id", "")),
+        "name": player_summary.get("name"),
+        "dateOfBirth": player_summary.get("dateOfBirth"),
+        "age": player_summary.get("age"),
+        "height": player_summary.get("height"),
+        "foot": player_summary.get("foot"),
+        "position": {"main": player_summary.get("position")},
+        "citizenship": player_summary.get("nationality", []),
+        "currentClub": {
+            "joined": player_summary.get("joinedOn"),
+            "contractExpires": player_summary.get("contract"),
+        },
+        "marketValue": player_summary.get("marketValue"),
+        "status": player_summary.get("status"),
+    }

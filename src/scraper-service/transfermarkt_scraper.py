@@ -3,6 +3,7 @@ import time
 import pandas as pd
 from pathlib import Path
 from typing import Any, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from transfermarkt_client import (
     fetch_tm_competition_clubs,
@@ -13,7 +14,7 @@ from transfermarkt_client import (
     fetch_tm_transfers,
     fetch_tm_injuries,
 )
-from name_matcher import load_wyscout_index, is_player_in_wyscout
+from name_matcher import load_wyscout_index, is_player_in_wyscout, build_profile_from_squad_summary
 
 # Resolve paths: <repo_root>/data/transfermarkt
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -23,6 +24,9 @@ RAW_PLAYERS_DIR = OUTPUT_DIR / "players_2017_2018"
 DISCOVERED_TM_CLUBS_FILE = OUTPUT_DIR / "discovered_tm_clubs_2017_2018.json"
 CAPOLOGY_DISCOVERED_FILE = REPO_ROOT / "data" / "capology" / "discovered_clubs_2017_2018.json"
 WYSCOUT_PLAYERS_FILE = REPO_ROOT / "data" / "wyscout" / "players.json"
+
+# Direct CDN URLs for https://github.com/dcaribou/transfermarkt-datasets fallback
+DCARIBOU_R2_BASE = "https://pub-e682421888d945d684bcae8890b0ec20.r2.dev/data"
 
 # Transfermarkt Competition IDs for the Top 5 European Leagues
 TOP5_LEAGUE_TM_IDS = {
@@ -173,39 +177,43 @@ def fetch_and_cache_player_details(
     cached_record: Optional[dict[str, Any]] = None
 
     if player_cache_file.exists():
-        print(f"[CACHE HIT] Loaded player {player_name} (ID: {player_id}) from disk.")
-        with open(player_cache_file, "r", encoding="utf-8") as f:
-            cached_record = json.load(f)
+        try:
+            with open(player_cache_file, "r", encoding="utf-8") as f:
+                cached_record = json.load(f)
+        except Exception as e:
+                    print(f"[ERROR] Failed to load cached player {player_name} (ID: {player_id}): {e}")
+                    cached_record = None
 
-        if is_cached_player_complete(cached_record):
+        if cached_record and is_cached_player_complete(cached_record):
             print(f"[CACHE HIT] Loaded player {player_name} (ID: {player_id}) from disk.")
             return cached_record
-        else:
-            print(f"[CACHE INCOMPLETE] Refetching data for player {player_name} (ID: {player_id}).")
+
+    print(f"[FETCHING] Player details for {player_name} (ID: {player_id}, Club: {club_name})...")
+
+    # Build profile from squad summary 
+    if cached_record and cached_record.get("profile") is not None:
+        profile = cached_record["profile"]
     else:
-        print(f"[FETCHING] Player details for {player_name} (ID: {player_id}, Club: {club_name})...")
+        profile = build_profile_from_squad_summary(player_summary)
 
-    profile = (
-        cached_record.get("profile")
-        if cached_record and cached_record.get("profile") is not None 
-        else fetch_tm_player_profile(player_id)
-    )
-    market_values = (
-        { "marketValueHistory": cached_record.get("market_value_history") }
-        if cached_record and cached_record.get("market_value_history") is not None
-        else fetch_tm_market_value(player_id)
-    )
-    transfers = (
-        { "transfers": cached_record.get("transfers") }
-        if cached_record and cached_record.get("transfers") is not None
-        else fetch_tm_transfers(player_id)
-    )
-    injuries = (
-        { "injuries": cached_record.get("injuries") }
-        if cached_record and cached_record.get("injuries") is not None
-        else fetch_tm_injuries(player_id)
-    )
+    # Market value history
+    if cached_record and cached_record.get("market_value_history") is not None:
+        market_values = {"marketValueHistory": cached_record["market_value_history"]}
+    else:
+        market_values = fetch_tm_market_value(player_id)
 
+    # Transfers history
+    if cached_record and cached_record.get("transfers") is not None:
+        transfers = {"transfers": cached_record["transfers"]}
+    else:
+        transfers = fetch_tm_transfers(player_id)
+
+    # Injuries history
+    if cached_record and cached_record.get("injuries") is not None:
+        injuries = {"injuries": cached_record["injuries"]}
+    else:
+        injuries = fetch_tm_injuries(player_id)
+    
     # Check if all 4 endpoints succeeded
     fetch_complete = all(x is not None for x in [profile, market_values, transfers, injuries])
 
@@ -216,7 +224,7 @@ def fetch_and_cache_player_details(
         "league": league_name,
         "tm_club_id": club_id,
         "club_name": club_name,
-        "squad_metadata": player_summary,
+        "joined_on": player_summary.get("joinedOn"),
         "fetch_complete": fetch_complete,
         "profile": profile,
         "market_value_history": market_values.get("marketValueHistory", []) if market_values else [],
@@ -234,10 +242,85 @@ def fetch_and_cache_player_details(
     return player_record
 
 # =====================================================================
+# Fallback Dataset:
+# =====================================================================
+
+def seed_players_from_dataset(
+    target_player_map: dict[str, dict[str, Any]],
+    wy_index: dict[str, Any],
+    season_label: str = "2017-2018",
+):
+    """
+    Fallback dataset using https://github.com/dcaribou/transfermarkt-datasets.
+    Downloads players.csv.gz, player_valuations.csv.gz, and transfers.csv.gz in memory
+    and populates RAW_PLAYERS_DIR/{player_id}.json for any missing/incomplete players.
+    """
+    missing_ids = {
+        pid for pid in target_player_map
+        if not (RAW_PLAYERS_DIR / f"{pid}.json").exists()
+    }
+    if not missing_ids:
+        print("[DATASET SEEDER] All target players are already cached locally.")
+        return
+
+    print(f"[DATASET SEEDER] Seeding {len(missing_ids)} players from dcaribou/transfermarkt-datasets...")
+    players_df = pd.read_csv(f"{DCARIBOU_R2_BASE}/players.csv.gz", dtype={"player_id": str})
+    valuations_df = pd.read_csv(f"{DCARIBOU_R2_BASE}/player_valuations.csv.gz", dtype={"player_id": str})
+    transfers_df = pd.read_csv(f"{DCARIBOU_R2_BASE}/transfers.csv.gz", dtype={"player_id": str})
+
+    players_by_id = players_df[players_df["player_id"].isin(missing_ids)].set_index("player_id").to_dict("index")
+    vals_by_id = {
+        pid: grp.to_dict("records")
+        for pid, grp in valuations_df[valuations_df["player_id"].isin(missing_ids)].groupby("player_id")
+    }
+    trans_by_id = {
+        pid: grp.to_dict("records")
+        for pid, grp in transfers_df[transfers_df["player_id"].isin(missing_ids)].groupby("player_id")
+    }
+
+    seeded_count = 0
+    for pid in missing_ids:
+        ctx = target_player_map[pid]
+        player_summary = ctx["player_summary"]
+        ds_profile = players_by_id.get(pid, {})
+
+        profile = build_profile_from_squad_summary(player_summary)
+        if ds_profile:
+            profile["height"] = profile.get("height") or ds_profile.get("height_in_cm")
+            profile["foot"] = profile.get("foot") or ds_profile.get("foot")
+            profile["dateOfBirth"] = profile.get("dateOfBirth") or ds_profile.get("date_of_birth")
+
+        player_record = {
+            "tm_player_id": pid,
+            "player_name": player_summary.get("name", ds_profile.get("name", "Unknown")),
+            "season": season_label,
+            "league": ctx["league_name"],
+            "tm_club_id": ctx["club_id"],
+            "club_name": ctx["club_name"],
+            "joined_on": player_summary.get("joinedOn"),
+            "fetch_complete": True,
+            "profile": profile,
+            "market_value_history": vals_by_id.get(pid, []),
+            "transfers": trans_by_id.get(pid, []),
+            "injuries": [],
+        }
+
+        with open(RAW_PLAYERS_DIR / f"{pid}.json", "w", encoding="utf-8") as f:
+            json.dump(player_record, f, ensure_ascii=False, indent=2)
+        seeded_count += 1
+
+    print(f"[DATASET SEEDER] Seeded {seeded_count} player files into {RAW_PLAYERS_DIR.name}/.")
+
+
+# =====================================================================
 # Main Pipeline: Discover Clubs, Fetch Squads, Fetch Player Data
 # =====================================================================
 
-def scrape_all_top5_transfermarkt(season_year: int = 2017):
+def scrape_all_top5_transfermarkt(
+    season_year: int = 2017,
+    max_workers: int = 4,
+    use_dataset_fallback: bool = True,
+):
     """
     Main pipeline to discover all 2017/18 Top 5 league clubs, retrieve their squads,
     and fetch complete Transfermarkt profiles, market values, transfers, and injuries.
@@ -247,20 +330,22 @@ def scrape_all_top5_transfermarkt(season_year: int = 2017):
     RAW_PLAYERS_DIR.mkdir(parents=True, exist_ok=True)
 
     wy_index = load_wyscout_index(WYSCOUT_PLAYERS_FILE)
-
     season_label = f"{season_year}_{season_year + 1}"
-    all_players_data: list[dict[str, Any]] = []
-    summary_rows: list[dict[str, Any]] = []
-    failed_clubs: list[tuple[str, str, str]] = []
 
     # Discover all clubs across the Top 5 leagues
     league_clubs_map = discover_all_tm_clubs(season_year=season_year)
     total_clubs = sum(len(clubs) for clubs in league_clubs_map.values())
-    processed_clubs = 0
 
+
+    # Fetch all 98 club squads first 
+    club_squads: list[tuple[str, str, str, list[dict[str, Any]]]] = []
+    unique_players_map: dict[str, dict[str, Any]] = {}
+    failed_clubs: list[tuple[str, str, str]] = []
+
+    processed_clubs = 0
     # Iterate through each league and club
     for league_name, clubs in league_clubs_map.items():
-        print(f"\n{'='*20} Processing {league_name} ({len(clubs)} clubs) {'='*20}")
+        print(f"\n{'='*20} Fetching {league_name} ({len(clubs)} clubs) {'='*20}")
 
         for club in clubs:
             processed_clubs += 1
@@ -272,54 +357,91 @@ def scrape_all_top5_transfermarkt(season_year: int = 2017):
             if not squad:
                 failed_clubs.append((league_name, club_name, club_id))
                 continue
+            
+            club_squads.append((league_name, club_id, club_name, squad))
+            for player_summary in squad:
+                pid = str(player_summary.get("id", "")).strip()
+                if pid and pid not in unique_players_map:
+                    unique_players_map[pid] = {
+                        "player_summary": player_summary,
+                        "club_id": club_id,
+                        "club_name": club_name,
+                        "league_name": league_name,
+                    }
+    print(f"\n[SQUADS READY] {len(club_squads)}/{total_clubs} clubs loaded ({len(unique_players_map)} unique players).")
 
-            # Check if each player in the squad is in the Wyscout index
-            active_squad = []
-            for player in squad:
-                p_id = str(player.get("id"))
-                cache_file = RAW_PLAYERS_DIR / f"{p_id}.json"
+    # Optional: Seed from dcaribou/transfermarkt-datasets if enabled
+    if use_dataset_fallback:
+        seed_players_from_dataset(
+            target_player_map=unique_players_map,
+            wy_index=wy_index,
+            season_label=f"{season_year}-{season_year + 1}",
+        )
 
-                if cache_file.exists():
-                    active_squad.append(player)
-                elif is_player_in_wyscout(player, wy_index):
-                    active_squad.append(player)
-                else:
-                    p_name = player.get("name", "Unknown")
-                    print(f"  -> [FILTERED OUT] {p_name} (ID: {p_id}) not active in Wyscout 2017/18.")
+    # Fetch unique players in parallel with ThreadPoolExecutor
+    total_unique = len(unique_players_map)
+    completed_count = 0
 
-            print(f"[*] Processing {len(active_squad)} active players (cut from {len(squad)} total squad).")
+    print(f"[SCRAPING PLAYERS] Fetching details for {total_unique} unique players (workers={max_workers})...")
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_pid = {
+            executor.submit(
+                fetch_and_cache_player_details,
+                player_summary=ctx["player_summary"],
+                club_id=ctx["club_id"],
+                club_name=ctx["club_name"],
+                league_name=ctx["league_name"],
+                season_label=f"{season_year}-{season_year + 1}",
+            ): pid
+            for pid, ctx in unique_players_map.items()
+        }
 
-            for idx, player_summary in enumerate(active_squad, start=1):
-                print(f"  -> [{idx}/{len(active_squad)}] ", end="")
-                player_record = fetch_and_cache_player_details(
-                    player_summary=player_summary,
-                    club_id=club_id,
-                    club_name=club_name,
-                    league_name=league_name,
-                    season_label=f"{season_year}-{season_year + 1}",
-                )
+        for future in as_completed(future_to_pid):
+            completed_count += 1
+            pid = future_to_pid[future]
+            try:
+                res = future.result()
+                if completed_count % 50 == 0 or completed_count == total_unique:
+                    status = "OK" if res and res.get("fetch_complete") else "PARTIAL"
+                    print(f"  -> Progress: [{completed_count}/{total_unique}] (Last ID: {pid}, {status})")
+            except Exception as e:
+                print(f"  -> [ERROR] Player ID {pid} raised exception: {e}")
 
-                if player_record:
-                    all_players_data.append(player_record)
-                    profile_data = player_record.get("profile", {}) or {}
-                    pos_data = profile_data.get("position", {}) or {}
-                    main_pos = pos_data.get("main") if isinstance(pos_data, dict) else pos_data
+    # Consolidate JSON and summary CSV across all club squads
+    all_players_data: list[dict[str, Any]] = []
+    summary_rows: list[dict[str, Any]] = []
+   
+    for league_name, club_id, club_name, squad in club_squads:
+        for player_summary in squad:
+            pid = str(player_summary.get("id", "")).strip()
+            cache_file = RAW_PLAYERS_DIR / f"{pid}.json"
+            if not cache_file.exists():
+                continue
 
-                    summary_rows.append({
-                        "tm_player_id": player_record.get("tm_player_id"),
-                        "player_name": player_record.get("player_name"),
-                        "season": player_record.get("season"),
-                        "league": player_record.get("league"),
-                        "tm_club_id": player_record.get("tm_club_id"),
-                        "club_name": player_record.get("club_name"),
-                        "position": player_summary.get("position") or main_pos,
-                        "date_of_birth": player_summary.get("dateOfBirth") or profile_data.get("dateOfBirth"),
-                        "foot": player_summary.get("foot") or profile_data.get("foot"),
-                        "height": player_summary.get("height") or profile_data.get("height"),
-                        "market_value_entries_count": len(player_record.get("market_value_history", [])),
-                        "transfers_count": len(player_record.get("transfers", [])),
-                        "injuries_count": len(player_record.get("injuries", [])),
-                    })
+            with open(cache_file, "r", encoding="utf-8") as f:
+                player_record = json.load(f)
+
+            all_players_data.append(player_record)
+            profile_data = player_record.get("profile", {}) or {}
+            pos_data = profile_data.get("position", {}) or {}
+            main_pos = pos_data.get("main") if isinstance(pos_data, dict) else pos_data
+
+            summary_rows.append({
+                "tm_player_id": player_record.get("tm_player_id"),
+                "player_name": player_record.get("player_name"),
+                "season": player_record.get("season"),
+                "league": league_name,
+                "tm_club_id": club_id,
+                "club_name": club_name,
+                "position": player_summary.get("position") or main_pos,
+                "date_of_birth": player_summary.get("dateOfBirth") or profile_data.get("dateOfBirth"),
+                "foot": player_summary.get("foot") or profile_data.get("foot"),
+                "height": player_summary.get("height") or profile_data.get("height"),
+                "joined_on": player_summary.get("joinedOn"),
+                "market_value_entries_count": len(player_record.get("market_value_history", [])),
+                "transfers_count": len(player_record.get("transfers", [])),
+                "injuries_count": len(player_record.get("injuries", [])),
+            })
 
     # Save consolidated datasets
     json_file = OUTPUT_DIR / f"transfermarkt_players_{season_label}.json"
