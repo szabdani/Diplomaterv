@@ -7,9 +7,6 @@ from typing import Any, Optional
 
 from utils import SLUG_QUERY_OVERRIDES, score_club_candidate
 
-# Base configuration
-DEFAULT_TM_API_URL = "http://localhost:8000"
-TM_API_URL = os.getenv("TM_API_URL", DEFAULT_TM_API_URL).rstrip("/")
 
 # =====================================================================
 # Client Utilities
@@ -62,7 +59,7 @@ def requests_get_retry(
 # Fetching Transfermarkt API Data
 # =====================================================================
 
-def fetch_tm_competition_clubs(competition_id: str, season_year: int = 2017) -> list[dict[str, Any]]:
+def fetch_tm_competition_clubs(competition_id: str, season_year: int = 2017, TM_API_URL: str = "http://localhost:8000") -> list[dict[str, Any]]:
     """
     Fetches all clubs participating in a competition for a specific season.
     """
@@ -82,6 +79,7 @@ def fetch_tm_team_data_search(
     team_name: str,
     short_name: Optional[str] = None,
     expected_countries: Optional[list[str]] = None,
+    TM_API_URL: str = "http://localhost:8000",
 ) -> Optional[dict[str, Any]]:
     """
     Searches for a club and selects the best senior-team candidate matching country and name tokens.
@@ -127,7 +125,7 @@ def fetch_tm_team_data_search(
     print(f"[NOT FOUND] Club not found: {team_name}")
     return None
 
-def fetch_tm_players_from_team(tm_team_id: int | str, season_year: int = 2017) -> list[dict[str, Any]]:
+def fetch_tm_players_from_team(tm_team_id: int | str, season_year: int = 2017, TM_API_URL: str = "http://localhost:8000") -> list[dict[str, Any]]:
     """
     Fetches all players in a club's squad for a specific season.
     """
@@ -143,7 +141,7 @@ def fetch_tm_players_from_team(tm_team_id: int | str, season_year: int = 2017) -
         print(f"[ERROR] TM API Get Club Players Error ({tm_team_id}): {e}")
     return []
 
-def fetch_tm_player_search(tm_id: int | str, player_name: str) -> Optional[dict[str, Any]]:
+def fetch_tm_player_search(tm_id: int | str, player_name: str, TM_API_URL: str = "http://localhost:8000") -> Optional[dict[str, Any]]:
     """
     Searches for a player and matches against their known Transfermarkt ID.
     """
@@ -161,7 +159,8 @@ def fetch_tm_player_search(tm_id: int | str, player_name: str) -> Optional[dict[
     return None
 
 
-def fetch_tm_player_profile(tm_player_id: int | str) -> Optional[dict[str, Any]]:
+
+def fetch_tm_player_profile(tm_player_id: int | str, TM_API_URL: str = "http://localhost:8000") -> Optional[dict[str, Any]]:
     """
     Fetches detailed player biographical data.
     """
@@ -178,7 +177,7 @@ def fetch_tm_player_profile(tm_player_id: int | str) -> Optional[dict[str, Any]]
         print(f"[ERROR] TM API Player Profile Error ({tm_player_id}): {e}")
     return None
 
-def fetch_tm_market_value(tm_player_id: int | str) -> Optional[dict[str, Any]]:
+def fetch_tm_market_value(tm_player_id: int | str, TM_API_URL: str = "http://localhost:8000") -> Optional[dict[str, Any]]:
     """
     Fetches complete historical market valuations for a player.
     """
@@ -195,7 +194,7 @@ def fetch_tm_market_value(tm_player_id: int | str) -> Optional[dict[str, Any]]:
         print(f"[ERROR] TM API Market Value Error ({tm_player_id}): {e}")
     return None
 
-def fetch_tm_transfers(tm_player_id: int | str) -> Optional[dict[str, Any]]:
+def fetch_tm_transfers(tm_player_id: int | str, TM_API_URL: str = "http://localhost:8000") -> Optional[dict[str, Any]]:
     """
     Fetches career transfer history with fees and clubs for a player.
     """
@@ -212,7 +211,7 @@ def fetch_tm_transfers(tm_player_id: int | str) -> Optional[dict[str, Any]]:
         print(f"[ERROR] TM API Transfers Error ({tm_player_id}): {e}")
     return None
 
-def fetch_tm_injuries(tm_player_id: int | str) -> Optional[dict[str, Any]]:
+def fetch_tm_injuries(tm_player_id: int | str, TM_API_URL: str = "http://localhost:8000") -> Optional[dict[str, Any]]:
     """
     Fetches the injury history of a player.
     """
@@ -229,7 +228,7 @@ def fetch_tm_injuries(tm_player_id: int | str) -> Optional[dict[str, Any]]:
         print(f"[ERROR] TM API Injuries Error ({tm_player_id}): {e}")
     return None
 
-def fetch_tm_player_season_appearances(tm_player_id: int | str, season_year: int = 2017, competitionID: str = "") -> int:
+def fetch_tm_player_season_appearances(tm_player_id: int | str, season_year: int = 2017, competitionID: str = "", TM_API_URL: str = "http://localhost:8000") -> int:
     """
     Fetches competition stats for a player and sums total appearances 
     across a single competition for the given season year.
@@ -261,18 +260,19 @@ def fetch_tm_player_season_appearances(tm_player_id: int | str, season_year: int
     return 0
 
 if __name__ == "__main__":
+    TM_API_URL: str = "http://localhost:8000",
     print(f"Target TM API URL: {TM_API_URL}")
     print("=" * 60)
 
     # 1. Test Club Search (Arsenal)
     print("1. Testing Club Search...")
-    club = fetch_tm_team_data_search("Arsenal FC", short_name="Arsenal")
+    club = fetch_tm_team_data_search("Arsenal FC", short_name="Arsenal", expected_countries=["England"], TM_API_URL=TM_API_URL)
     assert club is not None, "Failed to find Arsenal FC"
     club_id = club["id"]
 
     # 2. Test Squad retrieval for the 2017/18 season (Wyscout alignment)
     print(f"\n2. Testing 2017 Squad retrieval for club ID: {club_id}...")
-    squad = fetch_tm_players_from_team(club_id, season_year=2017)
+    squad = fetch_tm_players_from_team(club_id, season_year=2017, TM_API_URL=TM_API_URL)
     assert len(squad) > 0, "Squad returned empty for 2017 season"
 
     # Pick the first player from the squad to test individual endpoints
@@ -283,32 +283,32 @@ if __name__ == "__main__":
 
     # 3. Test Player Profile
     print(f"\n3. Testing Player Profile...")
-    profile = fetch_tm_player_profile(player_id)
+    profile = fetch_tm_player_profile(player_id, TM_API_URL=TM_API_URL)
     assert profile is not None, "Failed to fetch player profile"
 
     # 4. Test Player Search Matching
     print(f"\n4. Testing Player Search Match...")
-    search_res = fetch_tm_player_search(player_id, player_name)
+    search_res = fetch_tm_player_search(player_id, player_name, TM_API_URL=TM_API_URL)
 
     # 5. Test Market Value History
     print(f"\n5. Testing Market Value History...")
-    mv_history = fetch_tm_market_value(player_id)
+    mv_history = fetch_tm_market_value(player_id, TM_API_URL=TM_API_URL)
     assert mv_history is not None, "Failed to fetch market value history"
 
     # 6. Test Transfer History
     print(f"\n6. Testing Transfer History...")
-    transfers = fetch_tm_transfers(player_id)
+    transfers = fetch_tm_transfers(player_id, TM_API_URL=TM_API_URL)
     assert transfers is not None, "Failed to fetch transfers"
 
     # 7. Test Injury History
     print(f"\n7. Testing Injury History...")
-    injuries = fetch_tm_injuries(player_id)
+    injuries = fetch_tm_injuries(player_id, TM_API_URL=TM_API_URL)
     assert injuries is not None, "Failed to fetch injuries"
 
     # 8. Test Clubs in a Competition
     print(f"\n8. Testing Clubs in Competition...")
     competition_id = "GB1"
-    clubs_in_competition = fetch_tm_competition_clubs(competition_id, season_year=2017)
+    clubs_in_competition = fetch_tm_competition_clubs(competition_id, season_year=2017, TM_API_URL=TM_API_URL)
     assert len(clubs_in_competition) > 0, f"No clubs found for competition {competition_id}"
 
     print("\n" + "=" * 60)

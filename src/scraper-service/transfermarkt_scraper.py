@@ -59,7 +59,7 @@ def is_cached_player_complete(cached_record: dict[str, Any]) -> bool:
         return False
     return True
 
-def discover_all_tm_clubs(season_year: int = 2017) -> dict[str, list[dict[str, Any]]]:
+def discover_all_tm_clubs(season_year: int = 2017, TM_API_URL: str = "http://localhost:8000") -> dict[str, list[dict[str, Any]]]:
     """
     Loads Top 5 league clubs from local cache if present, otherwise queries the TM API.
     Falls back to Capology discovered club slugs when a competition endpoint is unavailable.
@@ -79,7 +79,7 @@ def discover_all_tm_clubs(season_year: int = 2017) -> dict[str, list[dict[str, A
 
     for league_name, comp_id in TOP5_LEAGUE_TM_IDS.items():
         print(f"\n[DISCOVERY] Fetching TM API for {league_name} ({comp_id}) clubs for season {season_year}...")
-        clubs = fetch_tm_competition_clubs(comp_id, season_year=season_year)
+        clubs = fetch_tm_competition_clubs(comp_id, season_year=season_year, TM_API_URL=TM_API_URL)
 
         if clubs:
             discovered[league_name] = [
@@ -103,6 +103,7 @@ def discover_all_tm_clubs(season_year: int = 2017) -> dict[str, list[dict[str, A
                 search_name,
                 short_name=search_name,
                 expected_countries=expected_country_filters,
+                TM_API_URL=TM_API_URL
             )
             if club_res and club_res.get("id"):
                 club_id = str(club_res["id"])
@@ -134,7 +135,8 @@ def fetch_and_cache_club_squad(
         club_id: str,
         club_name: str,
         league_name: str,
-        season_year: int = 2017
+        season_year: int = 2017,
+        TM_API_URL: str = "http://localhost:8000"
 ) -> list[dict[str, Any]]:
     """
     Fetches the 2017/18 squad for a single club. Checks local JSON cache first.
@@ -147,7 +149,7 @@ def fetch_and_cache_club_squad(
             return json.load(f)
 
     print(f"[FETCHING] Squad for {club_name} ({league_name}, ID: {club_id})...")
-    players = fetch_tm_players_from_team(club_id, season_year=season_year)
+    players = fetch_tm_players_from_team(club_id, season_year=season_year, TM_API_URL=TM_API_URL)
 
     if players:
         with open(squad_cache_file, "w", encoding="utf-8") as f:
@@ -160,7 +162,8 @@ def fetch_and_cache_player_details(
     club_id: str,
     club_name: str,
     league_name: str,
-    season_label: str = "2017-2018"
+    season_label: str = "2017-2018",
+    TM_API_URL: str = "http://localhost:8000"
 ) -> Optional[dict[str, Any]]:
     """
     Fetches profile, market value history, transfers, and injuries for a single player.
@@ -199,19 +202,19 @@ def fetch_and_cache_player_details(
     if cached_record and cached_record.get("market_value_history") is not None:
         market_values = {"marketValueHistory": cached_record["market_value_history"]}
     else:
-        market_values = fetch_tm_market_value(player_id)
+        market_values = fetch_tm_market_value(player_id, TM_API_URL=TM_API_URL)
 
     # Transfers history
     if cached_record and cached_record.get("transfers") is not None:
         transfers = {"transfers": cached_record["transfers"]}
     else:
-        transfers = fetch_tm_transfers(player_id)
+        transfers = fetch_tm_transfers(player_id, TM_API_URL=TM_API_URL)
 
     # Injuries history
     if cached_record and cached_record.get("injuries") is not None:
         injuries = {"injuries": cached_record["injuries"]}
     else:
-        injuries = fetch_tm_injuries(player_id)
+        injuries = fetch_tm_injuries(player_id, TM_API_URL=TM_API_URL)
     
     # Check if all 4 endpoints succeeded
     fetch_complete = all(x is not None for x in [profile, market_values, transfers, injuries])
@@ -247,6 +250,7 @@ def fetch_and_cache_player_details(
 def scrape_all_top5_transfermarkt(
     season_year: int = 2017,
     max_workers: int = 4,
+    TM_API_URL: str = "http://localhost:8000"
 ):
     """
     Main pipeline to discover all 2017/18 Top 5 league clubs, retrieve their squads,
@@ -259,7 +263,7 @@ def scrape_all_top5_transfermarkt(
     season_label = f"{season_year}_{season_year + 1}"
 
     # Discover all clubs across the Top 5 leagues
-    league_clubs_map = discover_all_tm_clubs(season_year=season_year)
+    league_clubs_map = discover_all_tm_clubs(season_year=season_year, TM_API_URL=TM_API_URL)
     total_clubs = sum(len(clubs) for clubs in league_clubs_map.values())
 
     # Fetch all 98 club squads first 
@@ -278,7 +282,7 @@ def scrape_all_top5_transfermarkt(
             club_name = club["name"]
             print(f"[{processed_clubs}/{total_clubs}] Club: {club_name} (ID: {club_id})")
 
-            squad = fetch_and_cache_club_squad(club_id, club_name, league_name, season_year=season_year)
+            squad = fetch_and_cache_club_squad(club_id, club_name, league_name, season_year=season_year, TM_API_URL=TM_API_URL)
             if not squad:
                 failed_clubs.append((league_name, club_name, club_id))
                 continue
@@ -309,6 +313,7 @@ def scrape_all_top5_transfermarkt(
                 club_name=ctx["club_name"],
                 league_name=ctx["league_name"],
                 season_label=f"{season_year}-{season_year + 1}",
+                TM_API_URL=TM_API_URL
             ): pid
             for pid, ctx in unique_players_map.items()
         }
@@ -386,4 +391,4 @@ def scrape_all_top5_transfermarkt(
             print(f"  - {league}: {c_name} (ID: {c_id})")
 
 if __name__ == "__main__":
-    scrape_all_top5_transfermarkt(season_year=2017)
+    scrape_all_top5_transfermarkt(season_year=2017, max_workers=4, TM_API_URL="http://localhost:8000")

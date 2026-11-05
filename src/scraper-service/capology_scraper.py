@@ -11,12 +11,16 @@ from bs4 import BeautifulSoup
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
+from dotenv import load_dotenv
 
 # Resolve paths: <repo_root>/data/capology
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 OUTPUT_DIR = REPO_ROOT / "data" / "capology"
 RAW_CLUBS_DIR = OUTPUT_DIR / "clubs_2017_2018"
 DISCOVERED_TEAMS_FILE = OUTPUT_DIR / "discovered_clubs_2017_2018.json"
+
+# Explicitly load .env from repository root
+load_dotenv(dotenv_path=REPO_ROOT / ".env")
 
 # Capology League Payroll Pages for the 2017/18 season
 LEAGUE_PAYROLL_URLS_2017_18 = {

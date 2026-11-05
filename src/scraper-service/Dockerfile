@@ -2,6 +2,7 @@ FROM python:3.12-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    RUNNING_IN_DOCKER=true \
     CHROME_BIN=/usr/bin/chromium \
     CHROMEDRIVER_PATH=/usr/bin/chromedriver \
     DISPLAY=:99
@@ -20,5 +21,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/scraper-service ./src/scraper-service
 
-# Run Xvfb virtual display in the background, then execute main.py
-CMD ["sh", "-c", "Xvfb :99 -screen 0 1920x1080x24 & python src/scraper-service/main.py"]
+# Purge old Xvfb lock files, run Xvfb in the background, then execute main.py
+CMD ["sh", "-c", "rm -f /tmp/.X99-lock && Xvfb :99 -screen 0 1920x1080x24 & python src/scraper-service/main.py"]
