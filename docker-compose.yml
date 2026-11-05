@@ -1,4 +1,3 @@
-version: "3.8"
 services:
   # External Transfermarkt Scraper API
   transfermarkt-api:
@@ -71,7 +70,7 @@ services:
   scraper-pipeline:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: src/scraper-service/Dockerfile
     container_name: football-scraper-pipeline
     depends_on:
       - transfermarkt-api

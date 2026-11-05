@@ -132,9 +132,6 @@ def discover_all_clubs(driver) -> dict[str, list[str]]:
         if slugs:
             discovered[league] = slugs
 
-        # Polite jitter delay between requests
-        time.sleep(random.uniform(1.0, 3.0))
-
     # Save to disk so we only discover once
     with open(DISCOVERED_TEAMS_FILE, "w", encoding="utf-8") as f:
         json.dump(discovered, f, ensure_ascii=False, indent=2)
@@ -153,6 +150,9 @@ def fetch_capology_club_salaries(driver, club_slug: str, league_name: str, seaso
         with open(club_cache_file, "r", encoding="utf-8") as f:
             return json.load(f)
 
+    # Polite jitter delay between requests
+    time.sleep(random.uniform(1.0, 3.0))
+    
     url = f"https://www.capology.com/club/{club_slug}/salaries/{season}/"
     print(f"[FETCHING] {club_slug} ({league_name}) -> {url}")
     driver.get(url)
@@ -230,8 +230,6 @@ def scrape_all_top5_leagues(season: str = "2017-2018"):
                     all_data.extend(club_data)
                 else:
                     failed_clubs.append((league, club))
-
-                time.sleep(random.uniform(1.0, 3.0))
 
     finally:
         # Prevent the Windows WinError 6 double-quit crash on GC
