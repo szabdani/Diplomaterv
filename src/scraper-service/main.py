@@ -1,11 +1,14 @@
 import os
 import json
 import pika
+import gc
+from contextlib import contextmanager
 from collections import defaultdict
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
 from dotenv import load_dotenv
+from pathlib import Path
+from time import perf_counter
+from typing import Any, Iterator
 
 # Import database and message broker connections
 from connections import get_mongo_connection, get_rabbitmq_connection, IS_DOCKER
@@ -29,6 +32,21 @@ TM_API_URL = os.getenv("TM_API_URL", f"http://{DEFAULT_TM_HOST}:8000").rstrip("/
 # Establish Connections
 mongo_client, raw_collection = get_mongo_connection()
 rabbit_conn, channel, RABBITMQ_QUEUE = get_rabbitmq_connection()
+
+# =====================================================================
+# Context Manager for Timing Pipeline Steps
+# =====================================================================
+
+@contextmanager
+def timed_pipeline_step(step_name: str, step_timings: dict[str, float]) -> Iterator[None]:
+    """Measure and print the duration of a pipeline step."""
+    started_at = perf_counter()
+    try:
+        yield
+    finally:
+        elapsed_seconds = perf_counter() - started_at
+        step_timings[step_name] = elapsed_seconds
+        print(f"[TIMING] {step_name}: {elapsed_seconds:.2f} seconds")
 
 # =====================================================================
 # Claim-Check Pattern Implementation
@@ -101,6 +119,8 @@ def load_wyscout_to_datapipeline(wyscout_dir: Path, channel) -> None:
                 raw_payload={"items": data},
                 unique_key=entity_type,
             )
+            del data
+            gc.collect()
 
     # 2. Players
     players_file = wyscout_dir / "players.json"
@@ -119,6 +139,8 @@ def load_wyscout_to_datapipeline(wyscout_dir: Path, channel) -> None:
                 unique_key=batch_key,
                 metadata={"count": len(batch)},
             )
+        del players
+        gc.collect()
 
     # 3. Matches per competition file
     matches_dir = wyscout_dir / "matches"
@@ -136,6 +158,8 @@ def load_wyscout_to_datapipeline(wyscout_dir: Path, channel) -> None:
                 unique_key=f"matches_{competition_label}",
                 metadata={"competition": competition_label, "match_count": len(matches)},
             )
+            del matches
+            gc.collect()
 
     # 4. Spatial Events grouped by matchId
     events_dir = wyscout_dir / "events"
@@ -150,10 +174,22 @@ def load_wyscout_to_datapipeline(wyscout_dir: Path, channel) -> None:
             all_events = json.load(f)
 
         events_by_match: dict[int | str, list[dict[str, Any]]] = defaultdict(list)
-        for ev in all_events:
-            events_by_match[ev.get("matchId", "Unknown")].append(ev)
 
-        for match_id, match_events in events_by_match.items():
+        # Group events by matchId to avoid sending huge payloads in one Claim-Check
+        while all_events:
+            ev = all_events.pop()
+            events_by_match[ev.get("matchId", "Unknown")].append(ev)
+        
+        del all_events
+        gc.collect()
+
+        # Dispatch Claim-Checks for each match's events
+        total_matches = len(events_by_match)
+        idx = 0
+
+        while events_by_match:
+            idx += 1
+            match_id, match_events = events_by_match.popitem()
             save_and_publish_claim_check(
                 channel=channel,
                 source="wyscout",
@@ -170,6 +206,11 @@ def load_wyscout_to_datapipeline(wyscout_dir: Path, channel) -> None:
                     "event_count": len(match_events),
                 },
             )
+            if idx % 50 == 0 or idx == total_matches:
+                print(f"  -> Dispatched [{idx}/{total_matches}] matches for {competition_label}")
+
+        del events_by_match
+        gc.collect()
 
 def load_capology_to_datapipeline(capology_clubs_dir: Path, channel) -> None:
     """
@@ -213,7 +254,7 @@ def load_transfermarkt_to_datapipeline(transfermarkt_players_dir: Path, channel)
             print(f"[WARNING] No data found in {player_file.name}.")
             continue
 
-        player_id_value = player_data.get("player_id")
+        player_id_value = player_data.get("tm_player_id")
         player_id = str(player_id_value) if player_id_value is not None else player_file.stem
 
         save_and_publish_claim_check(
@@ -242,40 +283,53 @@ def run_pipeline():
     3. Scrapes Transfermarkt 2017/18 squads & player histories (uses local cache if already scraped).
     4. Stores all raw JSON documents in MongoDB and publishes Claim-Check tickets to RabbitMQ.
     """
+    step_timings: dict[str, float] = {}
+
     try:
-        print("\n" + "=" * 60)
-        print("STEP 1: Ensuring Wyscout 2017/18 Dataset")
-        print("=" * 60)
-        wyscout_dir = DATA_DIR / "wyscout"
-        ensure_wyscout_data(wyscout_dir)
+        with timed_pipeline_step("STEP 1", step_timings):
+            print("\n" + "=" * 60)
+            print("STEP 1: Ensuring Wyscout 2017/18 Dataset")
+            print("=" * 60)
+            wyscout_dir = DATA_DIR / "wyscout"
+            ensure_wyscout_data(wyscout_dir)
 
-        print("\n" + "=" * 60)
-        print("STEP 2: Scraping Capology 2017/18 Club Salaries")
-        print("=" * 60)
-        scrape_all_top5_leagues(season="2017-2018")
+        with timed_pipeline_step("STEP 2", step_timings):
+            print("\n" + "=" * 60)
+            print("STEP 2: Scraping Capology 2017/18 Club Salaries")
+            print("=" * 60)
+            scrape_all_top5_leagues(season="2017-2018")
 
-        print("\n" + "=" * 60)
-        print("STEP 3: Scraping Transfermarkt 2017/18 Players")
-        print("=" * 60)
-        scrape_all_top5_transfermarkt(season_year=2017, TM_API_URL=TM_API_URL)
+        with timed_pipeline_step("STEP 3", step_timings):
+            print("\n" + "=" * 60)
+            print("STEP 3: Scraping Transfermarkt 2017/18 Players")
+            print("=" * 60)
+            scrape_all_top5_transfermarkt(season_year=2017, TM_API_URL=TM_API_URL)
 
-        print("\n" + "=" * 60)
-        print("STEP 4A: Loading Wyscout Data into MongoDB & RabbitMQ")
-        print("=" * 60)
-        load_wyscout_to_datapipeline(wyscout_dir, channel)
+        with timed_pipeline_step("STEP 4A", step_timings):
+            print("\n" + "=" * 60)
+            print("STEP 4A: Loading Wyscout Data into MongoDB & RabbitMQ")
+            print("=" * 60)
+            load_wyscout_to_datapipeline(wyscout_dir, channel)
 
-        print("\n" + "=" * 60)
-        print("STEP 4B: Loading Capology Data into MongoDB & RabbitMQ")
-        print("=" * 60)
-        load_capology_to_datapipeline(DATA_DIR / "capology" / "clubs_2017_2018", channel)
+        with timed_pipeline_step("STEP 4B", step_timings):
+            print("\n" + "=" * 60)
+            print("STEP 4B: Loading Capology Data into MongoDB & RabbitMQ")
+            print("=" * 60)
+            load_capology_to_datapipeline(DATA_DIR / "capology" / "clubs_2017_2018", channel)
 
-        print("\n" + "=" * 60)
-        print("STEP 4C: Loading Transfermarkt Player Data into MongoDB & RabbitMQ")
-        print("=" * 60)
-        load_transfermarkt_to_datapipeline(DATA_DIR / "transfermarkt" / "players_2017_2018", channel)
+        with timed_pipeline_step("STEP 4C", step_timings):
+            print("\n" + "=" * 60)
+            print("STEP 4C: Loading Transfermarkt Player Data into MongoDB & RabbitMQ")
+            print("=" * 60)
+            load_transfermarkt_to_datapipeline(DATA_DIR / "transfermarkt" / "players_2017_2018", channel)
 
         print("\n" + "=" * 60)
         print("[PIPELINE COMPLETE] All sources scraped, stored in MongoDB, and queued in RabbitMQ!")
+        print("\nStep durations:")
+        for step_name, elapsed_seconds in step_timings.items():
+            total_seconds = round(elapsed_seconds)
+            minutes, seconds = divmod(total_seconds, 60)
+            print(f"  {step_name}: {minutes} minute(s), {seconds} second(s)")
         print("=" * 60)
 
     finally:

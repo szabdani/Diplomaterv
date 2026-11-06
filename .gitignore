@@ -5,6 +5,9 @@
 __pycache__/
 *.py[cod]
 
+# Ignore virtual environments
+.vscode/
+
 # Ignore raw datasets
 data/wyscout/
 data/capology/

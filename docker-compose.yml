@@ -33,6 +33,11 @@ services:
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # Data Warehouse (PostgreSQL)
   postgres:
@@ -73,9 +78,12 @@ services:
       dockerfile: src/scraper-service/Dockerfile
     container_name: football-scraper-pipeline
     depends_on:
-      - transfermarkt-api
-      - mongodb
-      - rabbitmq
+      transfermarkt-api:
+        condition: service_started
+      mongodb:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
     env_file:
       - .env
     volumes:

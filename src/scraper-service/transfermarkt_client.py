@@ -246,7 +246,7 @@ def fetch_tm_player_season_appearances(tm_player_id: int | str, season_year: int
                 item_season = str(item.get("seasonID"))
                 item_competition = str(item.get("competitionID"))
 
-                if item_season == season_year and item_competition == competitionID:
+                if item_season == str(season_year) and item_competition == competitionID:
                     # Appearances can be string ("5") or int (5) or "-" (0)
                     apps = item.get("appearances", 0)
                     if isinstance(apps, str):
@@ -260,7 +260,7 @@ def fetch_tm_player_season_appearances(tm_player_id: int | str, season_year: int
     return 0
 
 if __name__ == "__main__":
-    TM_API_URL: str = "http://localhost:8000",
+    TM_API_URL: str = "http://localhost:8000"
     print(f"Target TM API URL: {TM_API_URL}")
     print("=" * 60)
 
