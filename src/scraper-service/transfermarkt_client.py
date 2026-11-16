@@ -93,8 +93,6 @@ def fetch_tm_team_data_search(
         q_clean = q.lower().strip()
         if q_clean in SLUG_QUERY_OVERRIDES:
             queries.append(SLUG_QUERY_OVERRIDES[q_clean])
-        if q_clean.startswith("st "):
-            queries.append("saint-" + q_clean[3:])
         if q not in queries:
             queries.append(q)
 

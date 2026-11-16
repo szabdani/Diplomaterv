@@ -86,6 +86,8 @@ services:
         condition: service_healthy
     env_file:
       - .env
+    environment:
+      TM_API_URL: http://transfermarkt-api:8000
     volumes:
       - ./data:/app/data
 
