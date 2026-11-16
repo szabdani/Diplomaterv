@@ -1,5 +1,14 @@
 # Ignore environment variables
 .env
 
+# Ignore Python bytecode caches
+__pycache__/
+*.py[cod]
+
+# Ignore virtual environments
+.vscode/
+
 # Ignore raw datasets
 data/wyscout/
+data/capology/
+data/transfermarkt/
