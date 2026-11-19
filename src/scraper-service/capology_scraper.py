@@ -34,9 +34,10 @@ LEAGUE_PAYROLL_URLS_2017_18 = {
 # =====================================================================
 # Scraper Utilities
 # =====================================================================
-
 def get_installed_chrome_major_version() -> int | None:
-    """Detects the major version of Google Chrome installed on Windows."""
+    """
+    Detects the major version of Google Chrome installed on Windows.
+    """
     try:
         # Query Windows Registry for Chrome version
         cmd = r'reg query "HKEY_CURRENT_USER\Software\Google\Chrome\BLBeacon" /v version'
@@ -86,6 +87,14 @@ def create_driver():
 # =====================================================================
 # Helpers for Club Discovery and Salary Scraping
 # =====================================================================
+def extract_league_slug(payroll_url: str) -> str:
+    """
+    Pulls the Capology league slug out of a payroll URL.
+    e.g. 'https://www.capology.com/de/1-bundesliga/payrolls/2017-2018/' -> '1-bundesliga'
+    """
+    match = re.search(r"capology\.com/[^/]+/([^/]+)/payrolls/", payroll_url)
+    return match.group(1) if match else "unknown"
+
 
 def get_league_club_slugs(driver, league_name: str, payroll_url: str) -> list[str]:
     """
@@ -142,7 +151,7 @@ def discover_all_clubs(driver) -> dict[str, list[str]]:
 
     return discovered
 
-def fetch_capology_club_salaries(driver, club_slug: str, league_name: str, season: str = "2017-2018"):
+def fetch_capology_club_salaries(driver, club_slug: str, league_name: str, league_slug: str, season: str = "2017-2018"):
     """
     Scrapes salary table for one club. Checks local JSON cache first.
     """
@@ -184,6 +193,7 @@ def fetch_capology_club_salaries(driver, club_slug: str, league_name: str, seaso
         if len(columns) > 4:
             squad_salaries.append({
                 "league": league_name,
+                "league_slug": league_slug,
                 "club": club_slug,
                 "season": season,
                 "player": columns[0].get_text(strip=True),
@@ -224,12 +234,13 @@ def scrape_all_top5_leagues(season: str = "2017-2018"):
 
         # Scrape each discovered club
         for league, clubs in league_clubs_map.items():
+            league_slug = extract_league_slug(LEAGUE_PAYROLL_URLS_2017_18.get(league, ""))
             print(f"\n{'='*20} Scraping {league} ({len(clubs)} clubs) {'='*20}")
             for club in clubs:
                 processed_count += 1
                 print(f"[{processed_count}/{total_clubs}] Processing {club}...")
 
-                club_data = fetch_capology_club_salaries(driver, club, league, season)
+                club_data = fetch_capology_club_salaries(driver, club, league, league_slug, season)
                 if club_data:
                     all_data.extend(club_data)
                 else:

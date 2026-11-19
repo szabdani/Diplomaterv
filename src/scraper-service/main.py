@@ -238,6 +238,7 @@ def load_capology_to_datapipeline(capology_clubs_dir: Path, raw_collection, chan
 
         club_slug = club_file.stem
         league = salaries[0].get("league", "Unknown")
+        league_slug = salaries[0].get("league_slug", "Unknown")
         season = salaries[0].get("season", "Unknown")
 
         save_and_publish_claim_check(
@@ -249,6 +250,7 @@ def load_capology_to_datapipeline(capology_clubs_dir: Path, raw_collection, chan
             raw_payload={
                 "club": club_slug, 
                 "league": league,
+                "league_slug": league_slug,
                 "season": season,
                 "salaries": salaries,
             },
