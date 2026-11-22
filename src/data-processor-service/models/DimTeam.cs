@@ -37,5 +37,4 @@ public class DimTeam
     public DimCompetition? Competition { get; set; }
 
     public ICollection<DimPlayer> Players { get; set; } = new List<DimPlayer>();
-    public ICollection<DimMatch> Matches { get; set; } = new List<DimMatch>();
 }

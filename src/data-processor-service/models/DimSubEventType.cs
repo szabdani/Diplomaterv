@@ -11,7 +11,7 @@ public class DimSubEventType
 {
     [Key]
     [Column("sub_event_type_id")]
-    public int SubEventTypeId { get; set; }
+    public short SubEventTypeId { get; set; }
 
     [Column("wy_sub_event_type_id")]
     public int WySubEventTypeId { get; set; }

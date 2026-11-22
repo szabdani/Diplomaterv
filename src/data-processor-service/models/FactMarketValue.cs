@@ -27,5 +27,5 @@ public class FactMarketValue
     public string? ClubAtValuation { get; set; }
 
     [ForeignKey(nameof(PlayerId))]
-    public DimPlayer Player { get; set; }
+    public DimPlayer? Player { get; set; }
 }

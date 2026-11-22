@@ -41,6 +41,6 @@ public class FactPlayerSalary
     public string? SourceCurrency { get; set; }
 
     [ForeignKey(nameof(PlayerId))]
-    public DimPlayer Player { get; set; }
+    public DimPlayer? Player { get; set; }
 
 }

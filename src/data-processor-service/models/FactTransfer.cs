@@ -33,6 +33,6 @@ public class FactTransfer
     public bool IsLoan { get; set; }
 
     [ForeignKey(nameof(PlayerId))]
-    public DimPlayer Player { get; set; }
+    public DimPlayer? Player { get; set; }
 
 }
