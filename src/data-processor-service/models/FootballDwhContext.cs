@@ -63,8 +63,7 @@ public class FootballDwhContext : DbContext
         b.Entity<DimMatch>().HasIndex(x => x.CompetitionId);
         b.Entity<DimMatch>().HasIndex(x => x.MatchDate);
 
-        b.entity<DimPosition>().HasIndex(x => x.WyPositionCode).IsUnique();
-        b.entity<DimRole>().HasIndex(x => x.RoleName).IsUnique();
+        b.Entity<DimRole>().HasIndex(x => x.RoleName).IsUnique();
         b.Entity<DimEventType>().HasIndex(x => x.WyEventTypeId).IsUnique();
         b.Entity<DimSubEventType>().HasIndex(x => x.WySubEventTypeId).IsUnique();
 
@@ -73,7 +72,7 @@ public class FootballDwhContext : DbContext
         b.Entity<FactMatchEvent>().HasIndex(x => x.PlayerId);
         b.Entity<FactMatchEvent>().HasIndex(x => new { x.EventTypeId, x.SubEventTypeId });
 
-        b.Entity<FactPlayerSeason>().HasIndex(x => new { x.PlayerId, x.CompetitionId, x.SeasonLabel }).IsUnique();
+        b.Entity<FactPlayerSeason>().HasIndex(x => new { x.PlayerId, x.SeasonLabel }).IsUnique();
         b.Entity<FactPlayerSeason>().HasIndex(x => x.PositionId);
         b.Entity<FactPlayerSeason>().HasIndex(x => x.CompetitionId);
         b.Entity<FactPlayerSeason>().Property(x => x.ComputedAt).HasDefaultValueSql("now()");

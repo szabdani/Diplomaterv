@@ -20,9 +20,6 @@ public class FactPlayerSalary
     [Column("team_id")]
     public int? TeamId { get; set; }
 
-    [ForeignKey(nameof(TeamId))]
-    public DimTeam? Team { get; set; }
-
     [Column("season_label")]
     [Required]
     public string SeasonLabel { get; set; } = "2017-2018";
@@ -43,4 +40,6 @@ public class FactPlayerSalary
     [ForeignKey(nameof(PlayerId))]
     public DimPlayer? Player { get; set; }
 
+    [ForeignKey(nameof(TeamId))]
+    public DimTeam? Team { get; set; }
 }
